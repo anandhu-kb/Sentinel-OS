@@ -11,7 +11,7 @@
 - 📊 **System Resources:** Real-time polling of your machine's CPU, Memory, and Disk usage via a sleek, dynamic UI.
 - 📡 **Sentinel (Uptime Monitoring):** Monitor the uptime, latency, and status of your favorite web services and APIs. 
 - 🛡️ **Guardian (Automated Backups):** Schedule encrypted, automated backups for your most important project directories.
-- 📸 **Snapshots:** Integrated window capture and screen clipping capabilities.
+- 📸 **Snapshots:** A built-in, Git-free local version control system. Take instant snapshots of your project directories, view line-by-line code diffs, and easily roll back to previous states without managing external repositories.
 - ⌨️ **Command Palette:** Press `Ctrl + K` to quickly navigate anywhere inside the OS.
 
 ---
