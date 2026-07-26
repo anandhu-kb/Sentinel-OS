@@ -18,29 +18,29 @@
 
 ## 🚀 Getting Started
 
-### Prerequisites
-- [Go 1.20+](https://go.dev/doc/install)
-- [Wails v2 CLI](https://wails.io/docs/gettingstarted/installation)
-- Node.js (for frontend dependencies if applicable)
+### Quick Download (Recommended)
+1. Head over to our **[Releases Page](https://github.com/anandhu-kb/Sentinel-OS/releases)**.
+2. Download the latest `Sentinel-OS.exe`.
+3. Run it from anywhere on your PC!
 
-### Installation
+### Build from Source
+If you prefer to compile it yourself:
 
-1. **Clone the repository:**
+1. **Prerequisites:**
+   - [Go 1.20+](https://go.dev/doc/install)
+   - [Wails v2 CLI](https://wails.io/docs/gettingstarted/installation)
+
+2. **Clone the repository:**
    ```bash
    git clone https://github.com/anandhu-kb/Sentinel-OS.git
    cd Sentinel-OS
    ```
 
-2. **Run in development mode (Live Reload):**
-   ```bash
-   wails dev
-   ```
-
-3. **Build for production:**
+3. **Build the app:**
    ```bash
    wails build
    ```
-   *The compiled binary will be placed in the `build/bin/` directory.*
+   *The compiled standalone executable will be placed in the `build/bin/` directory.*
 
 ---
 
