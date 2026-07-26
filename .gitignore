@@ -1,0 +1,26 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+build/bin/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Sentinel-OS specific files
+sentinel.db
+sentinel.key
+backup-vault/
+
+# Wails
+frontend/dist/
+frontend/node_modules/
+build/windows/
