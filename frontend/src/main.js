@@ -12,6 +12,8 @@ import {
     CreateSnapshot, 
     GetSnapshotHistory,
     GetSnapshotDiff,
+    AutoGenerateCommitMessage,
+    AutoGenerateAIReview,
     UpdateSnapshot,
     DeleteSnapshot,
     RestoreSnapshot,
@@ -21,19 +23,14 @@ import {
     GetUnmappedPrograms,
     GetDetailedLogs,
     GetProductivityHistoryByApp,
-    CreateBackup, 
-    RestoreBackup, 
-    GetBackupList, 
-    DeleteBackup,
-    UpdateBackup,
     GetSystemResources,
-    AddGuardianSchedule,
-    RemoveGuardianSchedule,
-    GetGuardianSchedules,
     StartPomodoro,
     CompletePomodoro,
     CancelPomodoro,
-    GetPomodoroHistory
+    GetPomodoroHistory,
+    TriggerDistractionAlert,
+    GetRunningApps,
+    GetLogs
 } from '../wailsjs/go/main/App.js';
 
 // Wails runtime is available globally via window.runtime
@@ -75,7 +72,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Modal Close ──
     document.getElementById('btn-close-diff').addEventListener('click', () => {
-        document.getElementById('snapshot-diff-modal').classList.add('hidden');
+        const modal = document.getElementById('snapshot-diff-modal');
+        modal.classList.add('hidden');
+        modal.style.display = 'none';
     });
 
     // ── Initial Data Load ──
@@ -98,13 +97,15 @@ function refreshCurrentView(viewId) {
         populateUnmappedProgramsDropdown();
         loadWatcherRules();
         loadWatcherData();
+        document.getElementById('tab-btn-timeline').click();
     }
-    if (viewId === 'pomodoro-view') loadPomodoroHistory();
+    if (viewId === 'pomodoro-view') {
+        loadPomodoroHistory();
+        if (window.loadPomodoroRunningApps) window.loadPomodoroRunningApps();
+    }
     if (viewId === 'snapshots-view') loadSnapshotsData();
-    if (viewId === 'guardian-view') {
-        loadGuardianData();
-        loadGuardianSchedules();
-    }
+    if (viewId === 'logs-view') startLogsPolling();
+    else stopLogsPolling();
 }
 
 // ── Wails Event Listeners ──
@@ -127,6 +128,38 @@ function setupEventListeners() {
         titleEl.innerText = title;
         catEl.innerText = data.category;
         
+        // Pomodoro Distraction Blocker
+        if (typeof pomodoroMode !== 'undefined' && pomodoroMode === 'focus' && typeof currentPomodoroId !== 'undefined' && currentPomodoroId !== null) {
+            const mode = document.getElementById('pomodoro-blocker-mode').value;
+            let isDistracted = false;
+
+            if (mode === 'category') {
+                const productiveCategories = ['IDE / Code', 'Browser / Docs', 'Terminal', 'Productivity'];
+                if (!productiveCategories.includes(data.category)) isDistracted = true;
+            } else if (mode === 'whitelist') {
+                const opts = document.getElementById('pomodoro-whitelist').selectedOptions;
+                const wl = Array.from(opts).map(opt => opt.value.toLowerCase());
+                if (wl.length > 0) {
+                    const match = wl.some(app => data.appName.toLowerCase() === app);
+                    if (!match) isDistracted = true;
+                }
+            } else if (mode === 'blacklist') {
+                const opts = document.getElementById('pomodoro-blacklist').selectedOptions;
+                const bl = Array.from(opts).map(opt => opt.value.toLowerCase());
+                if (bl.length > 0) {
+                    const match = bl.some(app => data.appName.toLowerCase() === app);
+                    if (match) isDistracted = true;
+                }
+            }
+
+            if (isDistracted) {
+                document.getElementById('distraction-app-name').innerText = data.appName + ' (' + data.category + ')';
+                document.getElementById('distraction-modal').style.display = 'flex';
+                // Trigger native Windows alert as well
+                TriggerDistractionAlert().catch(e => console.error("Alert error:", e));
+            }
+        }
+        
         // We also want to refresh the stats periodically or on change
         if (!document.getElementById('watcher-view').classList.contains('hidden')) {
             loadWatcherData();
@@ -137,22 +170,6 @@ function setupEventListeners() {
         if (!document.getElementById('snapshots-view').classList.contains('hidden')) {
             loadSnapshotsData();
         }
-    });
-
-    EventsOn("guardian:backup_created", (data) => {
-        if (!document.getElementById('guardian-view').classList.contains('hidden')) {
-            loadGuardianData();
-        }
-    });
-
-    EventsOn("guardian:backup_deleted", (data) => {
-        if (!document.getElementById('guardian-view').classList.contains('hidden')) {
-            loadGuardianData();
-        }
-    });
-    
-    EventsOn("guardian:backup_restored", (data) => {
-        alert(`Backup ${data.id} successfully restored to ${data.projectPath}!`);
     });
 }
 
@@ -231,53 +248,56 @@ function setupFormHandlers() {
     }
 
     // ── Snapshots Create ──
-    document.getElementById('btn-take-snapshot').addEventListener('click', async () => {
+    document.getElementById('btn-take-snapshot').addEventListener('click', async (e) => {
         const path = document.getElementById('snapshot-path').value;
-        const msg = document.getElementById('snapshot-msg').value;
+        let msg = document.getElementById('snapshot-msg').value;
         if (!path) return alert("Please provide a project path.");
         
         try {
-            await CreateSnapshot(path, msg);
-        } catch (e) {
-            alert("Failed to create snapshot: " + e);
-        }
-    });
-
-    // ── Guardian Create ──
-    document.getElementById('btn-create-backup').addEventListener('click', async () => {
-        const path = document.getElementById('guardian-path').value;
-        if (!path) return alert("Please provide a project path.");
-        
-        const btn = document.getElementById('btn-create-backup');
-        try {
-            btn.innerText = "⏳ Encrypting...";
+            const btn = e.currentTarget;
             btn.disabled = true;
-            await CreateBackup(path);
-        } catch (e) {
-            alert("Failed to create backup: " + e);
-        } finally {
-            btn.innerText = "🔒 Create AES Backup";
+            btn.innerText = "Taking...";
+
+            // 1. Take snapshot (initially with empty or provided msg)
+            const snap = await CreateSnapshot(path, msg);
+            
+            // 2. Auto-generate if msg was empty
+            if (!msg) {
+                const aiProvider = localStorage.getItem('ai_provider') || 'gemini';
+                let aiConfig = '';
+                if (aiProvider === 'gemini') {
+                    aiConfig = localStorage.getItem('gemini_api_key');
+                } else if (aiProvider === 'nvidia') {
+                    const nvKey = localStorage.getItem('nvidia_api_key');
+                    const nvMod = localStorage.getItem('nvidia_model');
+                    aiConfig = nvKey ? `${nvKey}|${nvMod || 'deepseek-ai/deepseek-coder-33b-instruct'}` : '';
+                } else {
+                    aiConfig = localStorage.getItem('ollama_model') || 'llama3';
+                }
+
+                if ((aiProvider !== 'ollama' && !aiConfig) === false) {
+                    // Let's get the previous ID to perform diff
+                    const history = await GetSnapshotHistory(path, 2);
+                    let prevId = 0;
+                    if (history && history.length > 1) {
+                        prevId = history[1].id;
+                    }
+                    await AutoGenerateCommitMessage(prevId, snap.id, aiProvider, aiConfig);
+                } else {
+                    alert("Snapshot taken, but no API key set for auto-summary.");
+                }
+            }
+            
+            document.getElementById('snapshot-msg').value = '';
+            loadSnapshotsData();
             btn.disabled = false;
-        }
-    });
-    
-    // ── Guardian Schedules ──
-    document.getElementById('add-schedule-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        const path = document.getElementById('schedule-path').value;
-        const interval = parseInt(document.getElementById('schedule-interval').value);
-        if (!path || isNaN(interval)) return;
-
-        try {
-            await AddGuardianSchedule(path, interval);
-            document.getElementById('schedule-path').value = '';
-            document.getElementById('schedule-interval').value = '';
-            loadGuardianSchedules();
+            btn.innerText = "Take Snapshot";
         } catch (err) {
-            alert("Failed to add schedule: " + err);
+            alert("Failed to create snapshot: " + err);
+            document.getElementById('btn-take-snapshot').disabled = false;
+            document.getElementById('btn-take-snapshot').innerText = "Take Snapshot";
         }
     });
-
     // ── Pomodoro Timer ──
     document.getElementById('btn-pomodoro-start').addEventListener('click', async () => {
         if (pomodoroInterval) return;
@@ -319,6 +339,112 @@ function setupFormHandlers() {
             alert("Failed to cancel: " + err);
         }
     });
+
+    // --- Pomodoro Distraction UI ---
+    document.getElementById('pomodoro-blocker-mode').addEventListener('change', (e) => {
+        const mode = e.target.value;
+        const wl = document.getElementById('pomodoro-whitelist-container');
+        const bl = document.getElementById('pomodoro-blacklist-container');
+        wl.style.display = mode === 'whitelist' ? 'block' : 'none';
+        bl.style.display = mode === 'blacklist' ? 'block' : 'none';
+    });
+
+    document.getElementById('btn-dismiss-distraction').addEventListener('click', () => {
+        document.getElementById('distraction-modal').style.display = 'none';
+    });
+
+    const apiKeyInput = document.getElementById('settings-gemini-key');
+    const aiProviderSelect = document.getElementById('settings-ai-provider');
+    const ollamaModelInput = document.getElementById('settings-ollama-model');
+    const nvidiaKeyInput = document.getElementById('settings-nvidia-key');
+    const nvidiaModelInput = document.getElementById('settings-nvidia-model');
+    const geminiGroup = document.getElementById('settings-gemini-group');
+    const ollamaGroup = document.getElementById('settings-ollama-group');
+    const nvidiaGroup = document.getElementById('settings-nvidia-group');
+
+    if (localStorage.getItem('gemini_api_key')) {
+        apiKeyInput.value = localStorage.getItem('gemini_api_key');
+    }
+    if (localStorage.getItem('ai_provider')) {
+        aiProviderSelect.value = localStorage.getItem('ai_provider');
+    }
+    if (localStorage.getItem('ollama_model')) {
+        ollamaModelInput.value = localStorage.getItem('ollama_model');
+    }
+    if (localStorage.getItem('nvidia_api_key')) {
+        nvidiaKeyInput.value = localStorage.getItem('nvidia_api_key');
+    }
+    if (localStorage.getItem('nvidia_model')) {
+        nvidiaModelInput.value = localStorage.getItem('nvidia_model');
+    }
+
+    const updateProviderUI = () => {
+        geminiGroup.style.display = 'none';
+        ollamaGroup.style.display = 'none';
+        nvidiaGroup.style.display = 'none';
+
+        if (aiProviderSelect.value === 'ollama') {
+            ollamaGroup.style.display = 'block';
+        } else if (aiProviderSelect.value === 'nvidia') {
+            nvidiaGroup.style.display = 'block';
+        } else {
+            geminiGroup.style.display = 'block';
+        }
+    };
+    aiProviderSelect.addEventListener('change', updateProviderUI);
+    updateProviderUI();
+
+    document.getElementById('btn-save-settings').addEventListener('click', () => {
+        localStorage.setItem('gemini_api_key', apiKeyInput.value.trim());
+        localStorage.setItem('ai_provider', aiProviderSelect.value);
+        localStorage.setItem('ollama_model', ollamaModelInput.value.trim());
+        localStorage.setItem('nvidia_api_key', nvidiaKeyInput.value.trim());
+        localStorage.setItem('nvidia_model', nvidiaModelInput.value.trim());
+        alert('Settings saved!');
+    });
+
+    document.getElementById('btn-diff-ai-review').addEventListener('click', async (e) => {
+        const aiProvider = localStorage.getItem('ai_provider') || 'gemini';
+        let aiConfig = '';
+        if (aiProvider === 'gemini') {
+            aiConfig = localStorage.getItem('gemini_api_key');
+            if (!aiConfig) {
+                alert("Please save your Gemini API key in the Settings tab first.");
+                return;
+            }
+        } else if (aiProvider === 'nvidia') {
+            const nvKey = localStorage.getItem('nvidia_api_key');
+            const nvMod = localStorage.getItem('nvidia_model');
+            if (!nvKey) {
+                alert("Please save your Nvidia API key in the Settings tab first.");
+                return;
+            }
+            aiConfig = `${nvKey}|${nvMod || 'deepseek-ai/deepseek-coder-33b-instruct'}`;
+        } else {
+            aiConfig = localStorage.getItem('ollama_model') || 'llama3';
+        }
+
+        if (!window._currentDiffIds) return;
+
+        const { prevId, id } = window._currentDiffIds;
+        const resultBox = document.getElementById('snapshot-diff-ai-result');
+        const originalHTML = e.currentTarget.innerHTML;
+        
+        try {
+            e.currentTarget.disabled = true;
+            e.currentTarget.innerHTML = "⏳ Generating AI Review...";
+            resultBox.innerHTML = "<p>Analyzing changes...</p>";
+            resultBox.style.display = "block";
+            
+            const htmlResult = await AutoGenerateAIReview(prevId, id, aiProvider, aiConfig);
+            resultBox.innerHTML = htmlResult;
+        } catch(err) {
+            resultBox.innerHTML = `<p style="color:var(--danger-color);">Error: ${err}</p>`;
+        } finally {
+            e.currentTarget.disabled = false;
+            e.currentTarget.innerHTML = originalHTML;
+        }
+    });
 }
 
 // ── Pomodoro Logic ──
@@ -330,17 +456,11 @@ let pomodoroMode = 'focus'; // 'focus' | 'break'
 
 function playPomodoroChime() {
     try {
-        const ctx = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.frequency.setValueAtTime(660, ctx.currentTime);
-        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.15);
-        gain.gain.setValueAtTime(0.4, ctx.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
-        osc.start(ctx.currentTime);
-        osc.stop(ctx.currentTime + 0.5);
+        const audio = document.getElementById('pomodoro-audio-tone');
+        if (audio) {
+            audio.currentTime = 0;
+            audio.play().catch(e => console.log("Audio play prevented:", e));
+        }
     } catch(e) {}
 }
 
@@ -549,9 +669,20 @@ async function loadSentinelData() {
 }
 
 let resourcePollInterval = null;
+let lastNetStats = { up: 0, down: 0, time: 0 };
+
+function formatBytes(bytes, decimals = 1) {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+}
+
 function startResourcePolling() {
     if (resourcePollInterval) clearInterval(resourcePollInterval);
-    resourcePollInterval = setInterval(pollResources, 500);
+    resourcePollInterval = setInterval(pollResources, 1000);
     pollResources();
 }
 
@@ -559,18 +690,70 @@ async function pollResources() {
     if (document.getElementById('resources-view').classList.contains('hidden')) {
         clearInterval(resourcePollInterval);
         resourcePollInterval = null;
+        lastNetStats = { up: 0, down: 0, time: 0 };
         return;
     }
     try {
         const stats = await GetSystemResources();
+        
+        // Host Info
+        const uptimeDays = Math.floor(stats.hostUptime / 86400);
+        const uptimeHrs = Math.floor((stats.hostUptime % 86400) / 3600);
+        const bootDate = new Date(stats.hostBootTime * 1000).toLocaleString();
+        document.getElementById('sys-host-info').innerText = `${stats.hostOs}  •  Uptime: ${uptimeDays}d ${uptimeHrs}h  •  Booted: ${bootDate}`;
+
+        // SVG Ring calculations (Dash array is 314)
+        const calcOffset = (percent) => Math.max(0, 314 - (percent / 100) * 314);
+
         document.getElementById('sys-cpu-text').innerText = stats.cpuPercent.toFixed(1) + '%';
-        document.getElementById('sys-cpu-bar').style.width = stats.cpuPercent.toFixed(1) + '%';
+        document.getElementById('sys-cpu-ring').style.strokeDashoffset = calcOffset(stats.cpuPercent);
         
         document.getElementById('sys-ram-text').innerText = stats.ramPercent.toFixed(1) + '%';
-        document.getElementById('sys-ram-bar').style.width = stats.ramPercent.toFixed(1) + '%';
+        document.getElementById('sys-ram-ring').style.strokeDashoffset = calcOffset(stats.ramPercent);
         
         document.getElementById('sys-disk-text').innerText = stats.diskPercent.toFixed(1) + '%';
-        document.getElementById('sys-disk-bar').style.width = stats.diskPercent.toFixed(1) + '%';
+        document.getElementById('sys-disk-ring').style.strokeDashoffset = calcOffset(stats.diskPercent);
+        
+        const now = Date.now();
+        if (lastNetStats.time > 0) {
+            const dt = (now - lastNetStats.time) / 1000;
+            const upSpeed = (stats.netUpload - lastNetStats.up) / dt;
+            const downSpeed = (stats.netDownload - lastNetStats.down) / dt;
+            document.getElementById('sys-net-up').innerText = formatBytes(Math.max(0, upSpeed)) + '/s';
+            document.getElementById('sys-net-down').innerText = formatBytes(Math.max(0, downSpeed)) + '/s';
+        }
+        lastNetStats = { up: stats.netUpload, down: stats.netDownload, time: now };
+        
+        const tbody = document.getElementById('sys-top-processes');
+        tbody.innerHTML = '';
+        if (stats.topProcesses && stats.topProcesses.length > 0) {
+            stats.topProcesses.forEach((p, idx) => {
+                const isHighCpu = p.cpu > 20;
+                const isHighMem = p.memory > 20;
+                const cpuColor = isHighCpu ? 'var(--accent-danger)' : 'var(--accent-primary)';
+                const memColor = isHighMem ? 'var(--accent-danger)' : 'var(--accent-purple)';
+                
+                tbody.innerHTML += `
+                <div style="display: flex; justify-content: space-between; align-items: center; padding: 12px; background: rgba(0,0,0,0.2); border-radius: 8px; border-left: 3px solid ${isHighCpu || isHighMem ? 'var(--accent-danger)' : 'rgba(255,255,255,0.1)'};">
+                    <div style="display: flex; align-items: center; gap: 12px;">
+                        <span style="color: var(--text-secondary); font-weight: bold; width: 20px;">#${idx+1}</span>
+                        <span style="font-weight: 500; font-size: 1.05rem;">${p.name}</span>
+                    </div>
+                    <div style="display: flex; gap: 20px; font-size: 0.95rem;">
+                        <div style="width: 80px; text-align: right;">
+                            <span style="color: var(--text-secondary); font-size: 0.8rem; margin-right: 5px;">CPU</span>
+                            <span style="color: ${cpuColor}; font-weight: bold;">${p.cpu.toFixed(1)}%</span>
+                        </div>
+                        <div style="width: 80px; text-align: right;">
+                            <span style="color: var(--text-secondary); font-size: 0.8rem; margin-right: 5px;">MEM</span>
+                            <span style="color: ${memColor}; font-weight: bold;">${p.memory.toFixed(1)}%</span>
+                        </div>
+                    </div>
+                </div>`;
+            });
+        } else {
+            tbody.innerHTML = '<div style="text-align: center; color: var(--text-secondary); padding: 20px;">No processes found or access denied.</div>';
+        }
     } catch(e) {
         console.error("Resource poll error:", e);
     }
@@ -726,17 +909,13 @@ async function loadWatcherData() {
             const colors = ['#8A2BE2', '#00FFFF', '#FF1493', '#FFD700', '#32CD32', '#FF4500', '#FF6347', '#4682B4'];
             
             // ── Load Today's Detailed Logs ──
-            const recentContainer = document.getElementById('watcher-recent-tasks');
-            const pieContainer = document.getElementById('watcher-pie-chart');
-            const legendContainer = document.getElementById('watcher-pie-legend-table');
-            recentContainer.innerHTML = '';
-            legendContainer.innerHTML = '';
+            const legendContainer = document.getElementById('watcher-pie-legend');
+            if (legendContainer) legendContainer.innerHTML = '';
             
             try {
                 const detailedLogs = await GetDetailedLogs(1); // 1 day
                 if (!detailedLogs || detailedLogs.length === 0) {
-                    recentContainer.innerHTML = '<p style="color: var(--text-secondary)">No tasks recorded today.</p>';
-                    pieContainer.style.background = `var(--bg-tertiary)`;
+                    if (legendContainer) legendContainer.innerHTML = '<p style="color: var(--text-secondary)">No tasks recorded today.</p>';
                 } else {
                     // Aggregate logs by App Name
                     const appAggregates = {};
@@ -773,58 +952,24 @@ async function loadWatcherData() {
                         const mins = Math.floor((app.totalSecs % 3600) / 60);
                         const timeStr = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
                         
-                        gradientStops.push(`${color} ${currentPercent}% ${currentPercent + percent}%`);
-                        currentPercent += percent;
-                        
-                        const tr = document.createElement('tr');
-                        tr.innerHTML = `
-                            <td><div style="display:flex; align-items:center; gap:5px;"><div style="width:10px; height:10px; background:${color}; border-radius:50%;"></div>${app.appName}</div></td>
-                            <td>${timeStr}</td>
-                            <td>${Math.round(percent)}%</td>
-                        `;
-                        legendContainer.appendChild(tr);
-                    });
-                    
-                    if (gradientStops.length > 0) {
-                        pieContainer.style.background = `conic-gradient(${gradientStops.join(', ')})`;
-                    } else {
-                        pieContainer.style.background = `var(--bg-tertiary)`;
-                    }
-
-                    // Draw Recent Tasks Cards
-                    apps.forEach(app => {
-                        const hrs = Math.floor(app.totalSecs / 3600);
-                        const mins = Math.floor((app.totalSecs % 3600) / 60);
-                        const timeStr = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
-                        
-                        const activeWindowTitle = document.getElementById('active-window-title').innerText;
-                        const isRunning = activeWindowTitle.includes(app.appName);
-                        
-                        const statusDot = isRunning ? `<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--up-color); box-shadow: 0 0 5px var(--up-color); margin-right:5px;"></span>` 
-                                                    : `<span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--down-color); margin-right:5px;"></span>`;
-                        const endedStr = isRunning ? `<span style="color:var(--up-color)">Running</span>` : new Date(app.lastEnded).toLocaleTimeString();
-                        
-                        const card = document.createElement('div');
-                        card.className = 'card';
-                        card.style.padding = '10px';
-                        card.innerHTML = `
-                            <div style="display: flex; justify-content: space-between; align-items: flex-start;">
-                                <div>
-                                    <div style="font-weight: bold; color: var(--text-primary); display:flex; align-items:center;">
-                                        ${statusDot} ${app.appName} <span style="font-size: 0.8rem; color: var(--text-secondary); margin-left: 5px;">(${app.category})</span>
-                                    </div>
-                                    <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">
-                                        Started: ${new Date(app.firstStarted).toLocaleTimeString()} <br>
-                                        Ended: ${endedStr}
-                                    </div>
+                        const row = document.createElement('div');
+                        row.style = "display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px;";
+                        row.innerHTML = `
+                            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <div style="width:10px; height:10px; background:${color}; border-radius:3px; box-shadow: 0 0 5px ${color}80;"></div>
+                                    <span style="font-weight: 500;">${app.appName}</span>
                                 </div>
-                                <div style="text-align: right;">
-                                    <div style="font-weight: bold; color: var(--accent-color);">${timeStr}</div>
-                                    <div style="font-size: 0.75rem; color: var(--text-secondary);">Focus Time</div>
+                                <div style="display:flex; gap:10px; color: var(--text-secondary);">
+                                    <span>${timeStr}</span>
+                                    <span style="font-weight: bold; width: 35px; text-align: right;">${Math.round(percent)}%</span>
                                 </div>
                             </div>
+                            <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden;">
+                                <div style="width: ${percent}%; height: 100%; background: ${color}; border-radius: 3px;"></div>
+                            </div>
                         `;
-                        recentContainer.appendChild(card);
+                        if (legendContainer) legendContainer.appendChild(row);
                     });
                 }
             } catch(e) {
@@ -864,9 +1009,6 @@ async function loadWatcherData() {
                     const apps = Object.values(appAggregates).sort((a, b) => b.totalSecs - a.totalSecs);
                     const totalAllSecs = apps.reduce((sum, app) => sum + app.totalSecs, 0);
                     
-                    let gradientStops = [];
-                    let currentPercent = 0;
-                    
                     apps.forEach((app, idx) => {
                         const color = colors[idx % colors.length];
                         const percent = (app.totalSecs / totalAllSecs) * 100;
@@ -874,23 +1016,25 @@ async function loadWatcherData() {
                         const mins = Math.floor((app.totalSecs % 3600) / 60);
                         const timeStr = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
                         
-                        gradientStops.push(`${color} ${currentPercent}% ${currentPercent + percent}%`);
-                        currentPercent += percent;
-                        
-                        const tr = document.createElement('tr');
-                        tr.innerHTML = `
-                            <td><div style="display:flex; align-items:center; gap:5px;"><div style="width:10px; height:10px; background:${color}; border-radius:50%;"></div><strong>${app.appName}</strong></div></td>
-                            <td>${app.category}</td>
-                            <td>${new Date(app.firstStarted).toLocaleString()}</td>
-                            <td>${new Date(app.lastEnded).toLocaleString()}</td>
-                            <td style="color:var(--accent-color); font-weight:bold;">${timeStr}</td>
+                        const row = document.createElement('div');
+                        row.style = "display: flex; flex-direction: column; gap: 5px; margin-bottom: 10px;";
+                        row.innerHTML = `
+                            <div style="display: flex; justify-content: space-between; align-items: center; font-size: 0.9rem;">
+                                <div style="display:flex; align-items:center; gap:8px;">
+                                    <div style="width:10px; height:10px; background:${color}; border-radius:3px; box-shadow: 0 0 5px ${color}80;"></div>
+                                    <span style="font-weight: 500;">${app.appName}</span>
+                                </div>
+                                <div style="display:flex; gap:10px; color: var(--text-secondary);">
+                                    <span>${timeStr}</span>
+                                    <span style="font-weight: bold; width: 35px; text-align: right;">${Math.round(percent)}%</span>
+                                </div>
+                            </div>
+                            <div style="width: 100%; height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden;">
+                                <div style="width: ${percent}%; height: 100%; background: ${color}; border-radius: 3px;"></div>
+                            </div>
                         `;
-                        allTimeTbody.appendChild(tr);
+                        allTimeTbody.appendChild(row);
                     });
-                    
-                    if (gradientStops.length > 0) {
-                        allTimePie.style.background = `conic-gradient(${gradientStops.join(', ')})`;
-                    }
                 }
             } catch(e) {
                 console.error("Failed to load all time summary", e);
@@ -1089,25 +1233,29 @@ async function populateUnmappedProgramsDropdown() {
 document.getElementById('tab-btn-summary').addEventListener('click', () => {
     document.getElementById('tab-btn-summary').className = 'btn primary';
     document.getElementById('tab-btn-detailed').className = 'btn secondary';
+    document.getElementById('tab-btn-timeline').className = 'btn secondary';
     document.getElementById('watcher-history-content').style.display = 'block';
     document.getElementById('watcher-detailed-logs-content').style.display = 'none';
+    document.getElementById('watcher-timeline-content').style.display = 'none';
 });
 
 document.getElementById('tab-btn-detailed').addEventListener('click', async () => {
     document.getElementById('tab-btn-summary').className = 'btn secondary';
     document.getElementById('tab-btn-detailed').className = 'btn primary';
+    document.getElementById('tab-btn-timeline').className = 'btn secondary';
     document.getElementById('watcher-history-content').style.display = 'none';
+    document.getElementById('watcher-timeline-content').style.display = 'none';
     document.getElementById('watcher-detailed-logs-content').style.display = 'block';
     
     // Load Detailed Logs
-    const tbody = document.getElementById('detailed-logs-tbody');
-    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;">Loading...</td></tr>';
+    const grid = document.getElementById('detailed-logs-grid');
+    grid.innerHTML = '<div style="color:var(--text-secondary); text-align:center; grid-column: 1 / -1; padding: 20px;">Loading...</div>';
     try {
-        // Just fetch last 7 days for the table
+        // Just fetch last 7 days for the detailed logs
         const logs = await GetDetailedLogs(7); 
-        tbody.innerHTML = '';
+        grid.innerHTML = '';
         if (!logs || logs.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" style="color: var(--text-secondary); text-align: center;">No detailed logs available.</td></tr>';
+            grid.innerHTML = '<div style="color:var(--text-secondary); text-align:center; grid-column: 1 / -1; padding: 20px;">No detailed logs available.</div>';
             return;
         }
         
@@ -1116,7 +1264,7 @@ document.getElementById('tab-btn-detailed').addEventListener('click', async () =
         const filteredLogs = taskSelect === 'all' ? logs : logs.filter(l => l.appName === taskSelect);
         
         if (filteredLogs.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="5" style="color: var(--text-secondary); text-align: center;">No detailed logs for this task.</td></tr>';
+            grid.innerHTML = '<div style="color:var(--text-secondary); text-align:center; grid-column: 1 / -1; padding: 20px;">No detailed logs for this task.</div>';
             return;
         }
 
@@ -1144,22 +1292,91 @@ document.getElementById('tab-btn-detailed').addEventListener('click', async () =
         const aggArray = Object.values(aggregated).sort((a, b) => new Date(b.date) - new Date(a.date) || b.totalSecs - a.totalSecs);
 
         aggArray.forEach(log => {
-            const tr = document.createElement('tr');
+            const card = document.createElement('div');
+            card.className = 'card';
+            card.style = 'padding: 15px; display: flex; flex-direction: column; justify-content: space-between;';
             const hrs = Math.floor(log.totalSecs / 3600);
             const mins = Math.floor((log.totalSecs % 3600) / 60);
             const timeStr = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
             
-            tr.innerHTML = `
-                <td><strong>${log.appName}</strong> <span style="font-size:0.8rem; color:var(--text-secondary)">(${log.category})</span></td>
-                <td>${log.date}</td>
-                <td>${new Date(log.firstStarted).toLocaleTimeString()}</td>
-                <td>${new Date(log.lastEnded).toLocaleTimeString()}</td>
-                <td style="color:var(--accent-color); font-weight:bold;">${timeStr}</td>
+            card.innerHTML = `
+                <div style="display: flex; justify-content: space-between; margin-bottom: 15px;">
+                    <div>
+                        <div style="font-weight: bold; font-size: 1.1rem; color: var(--text-primary);">${log.appName}</div>
+                        <div style="font-size: 0.85rem; color: var(--text-secondary);">${log.category}</div>
+                    </div>
+                    <div style="text-align: right;">
+                        <div style="font-weight: bold; color: var(--accent-color); font-size: 1.1rem;">${timeStr}</div>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary);">Focus Time</div>
+                    </div>
+                </div>
+                <div style="font-size: 0.85rem; color: var(--text-secondary); background: var(--bg-dark); padding: 8px; border-radius: 4px;">
+                    <div style="margin-bottom: 4px;"><strong>Date:</strong> ${log.date}</div>
+                    <div style="display: flex; justify-content: space-between;">
+                        <span><strong>In:</strong> ${new Date(log.firstStarted).toLocaleTimeString()}</span>
+                        <span><strong>Out:</strong> ${new Date(log.lastEnded).toLocaleTimeString()}</span>
+                    </div>
+                </div>
             `;
-            tbody.appendChild(tr);
+            grid.appendChild(card);
         });
     } catch (e) {
         console.error("Failed to load detailed logs", e);
+    }
+});
+
+document.getElementById('tab-btn-timeline').addEventListener('click', async () => {
+    document.getElementById('tab-btn-summary').className = 'btn secondary';
+    document.getElementById('tab-btn-detailed').className = 'btn secondary';
+    document.getElementById('tab-btn-timeline').className = 'btn primary';
+    document.getElementById('watcher-history-content').style.display = 'none';
+    document.getElementById('watcher-detailed-logs-content').style.display = 'none';
+    document.getElementById('watcher-timeline-content').style.display = 'block';
+    
+    const container = document.getElementById('timeline-container');
+    container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-secondary);">Loading...</div>';
+    
+    try {
+        const logs = await GetDetailedLogs(1);
+        if (!logs || logs.length === 0) {
+            container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-secondary);">No data for today.</div>';
+            return;
+        }
+        
+        const todayStr = new Date().toLocaleDateString();
+        const todayLogs = logs.filter(l => new Date(l.startedAt).toLocaleDateString() === todayStr);
+        
+        if (todayLogs.length === 0) {
+            container.innerHTML = '<div style="text-align:center; padding:20px; color:var(--text-secondary);">No data for today.</div>';
+            return;
+        }
+
+        const startOfDay = new Date();
+        startOfDay.setHours(0,0,0,0);
+        const dayMs = 24 * 60 * 60 * 1000;
+        
+        let html = '';
+        todayLogs.forEach(log => {
+            const startMs = new Date(log.startedAt).getTime();
+            const endMs = new Date(log.endedAt).getTime();
+            
+            let leftPerc = ((startMs - startOfDay.getTime()) / dayMs) * 100;
+            let widthPerc = ((endMs - startMs) / dayMs) * 100;
+            
+            if (leftPerc < 0) leftPerc = 0;
+            if (leftPerc + widthPerc > 100) widthPerc = 100 - leftPerc;
+            
+            let color = 'var(--accent-warning)';
+            if (log.category === 'Productive') color = 'var(--accent-success)';
+            if (log.category === 'Unproductive') color = 'var(--accent-danger)';
+            
+            html += `<div title="${log.appName} (${log.category})\nFrom: ${new Date(log.startedAt).toLocaleTimeString()}\nTo: ${new Date(log.endedAt).toLocaleTimeString()}" style="position: absolute; left: ${leftPerc}%; width: ${widthPerc}%; height: 100%; background: ${color}; border-right: 1px solid rgba(0,0,0,0.2); cursor: pointer; transition: opacity 0.2s;" onmouseover="this.style.opacity='0.8'" onmouseout="this.style.opacity='1'"></div>`;
+        });
+        container.innerHTML = html;
+        
+    } catch(e) {
+        container.innerHTML = '<div style="color:var(--accent-danger); padding:20px;">Error loading timeline.</div>';
+        console.error("Timeline error:", e);
     }
 });
 
@@ -1187,6 +1404,7 @@ async function loadSnapshotsData() {
                 <td>
                     <span id="snap-msg-${s.id}">${s.message || '-'}</span>
                     <button class="btn-icon btn-edit-snap" data-id="${s.id}" data-msg="${s.message}" title="Edit Message" style="margin-left:5px;">✏️</button>
+                    <button class="btn-icon btn-ai-snap" data-id="${s.id}" data-prev="${i < history.length-1 ? history[i+1].id : 0}" title="Auto Generate Message with Gemini" style="margin-left:5px;">✨</button>
                 </td>
                 <td title="${s.projectPath}">${s.projectPath.length > 25 ? '...' + s.projectPath.substring(s.projectPath.length - 22) : s.projectPath}</td>
                 <td>${s.fileCount}</td>
@@ -1214,6 +1432,44 @@ async function loadSnapshotsData() {
                     } catch(err) {
                         alert("Update failed: " + err);
                     }
+                }
+            });
+        });
+
+        document.querySelectorAll('.btn-ai-snap').forEach(btn => {
+            btn.addEventListener('click', async (e) => {
+                const id = parseInt(e.currentTarget.getAttribute('data-id'));
+                const prevId = parseInt(e.currentTarget.getAttribute('data-prev'));
+                
+                const apiKey = prompt("Enter Gemini API Key (Free tier):");
+                if (!apiKey) return;
+
+                const originalHTML = e.currentTarget.innerHTML;
+                e.currentTarget.innerHTML = "⏳";
+                e.currentTarget.disabled = true;
+
+                try {
+                    const aiProvider = localStorage.getItem('ai_provider') || 'gemini';
+                    let aiConfig = '';
+                    if (aiProvider === 'gemini') {
+                        aiConfig = localStorage.getItem('gemini_api_key');
+                        if (!aiConfig) throw new Error("Gemini API key missing in settings");
+                    } else if (aiProvider === 'nvidia') {
+                        const nvKey = localStorage.getItem('nvidia_api_key');
+                        const nvMod = localStorage.getItem('nvidia_model');
+                        if (!nvKey) throw new Error("Nvidia API key missing in settings");
+                        aiConfig = `${nvKey}|${nvMod || 'deepseek-ai/deepseek-coder-33b-instruct'}`;
+                    } else {
+                        aiConfig = localStorage.getItem('ollama_model') || 'llama3';
+                    }
+
+                    await AutoGenerateCommitMessage(prevId, id, aiProvider, aiConfig);
+                    loadSnapshotsData();
+                } catch(err) {
+                    alert("AI Generation failed: " + err);
+                } finally {
+                    e.currentTarget.innerHTML = originalHTML;
+                    e.currentTarget.disabled = false;
                 }
             });
         });
@@ -1263,28 +1519,77 @@ async function loadSnapshotsData() {
                 try {
                     const diff = await GetSnapshotDiff(prevId, id);
                     const modal = document.getElementById('snapshot-diff-modal');
+                    const fileList = document.getElementById('snapshot-diff-file-list');
                     const content = document.getElementById('snapshot-diff-content');
                     
-                    let html = `<div style="margin-bottom:10px;"><strong>Summary:</strong> ${diff.summary.filesAdded} added, ${diff.summary.filesModified} modified, ${diff.summary.filesDeleted} deleted. (${diff.summary.linesAdded} lines added, ${diff.summary.linesDeleted} lines deleted)</div>`;
+                    let fileListHTML = '';
+                    const renderFileDiff = (f) => {
+                        let html = `<div style="margin-bottom: 15px;">
+                            <div style="font-weight: bold; font-size: 1.1rem; margin-bottom: 10px;">${f.relPath}</div>
+                            <div style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; overflow-x: auto;">
+                        `;
+                        if (f.chunks && f.chunks.length > 0) {
+                            f.chunks.forEach(c => {
+                                let text = c.text;
+                                if (text.endsWith('\n')) text = text.slice(0, -1);
+                                const lines = text.split('\n');
+                                
+                                let displayLines = lines;
+                                if (c.type === 0 && lines.length > 6) {
+                                    displayLines = [...lines.slice(0, 3), "...", ...lines.slice(-3)];
+                                }
+
+                                displayLines.forEach(line => {
+                                    if (line === "...") {
+                                        html += `<div style="padding: 5px; color: var(--text-secondary); text-align: center; background: rgba(0,0,0,0.2); margin: 2px 0;">...</div>`;
+                                        return;
+                                    }
+                                    const escaped = line.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                                    if (c.type === -1) {
+                                        html += `<div style="background: rgba(255,0,0,0.15); color: #ff8888; padding: 0 5px;"><span style="user-select:none; display:inline-block; width: 20px;">-</span>${escaped}</div>`;
+                                    } else if (c.type === 1) {
+                                        html += `<div style="background: rgba(0,255,0,0.15); color: #88ff88; padding: 0 5px;"><span style="user-select:none; display:inline-block; width: 20px;">+</span>${escaped}</div>`;
+                                    } else {
+                                        html += `<div style="padding: 0 5px;"><span style="user-select:none; display:inline-block; width: 20px; color: var(--text-secondary);"> </span><span style="color: var(--text-secondary);">${escaped}</span></div>`;
+                                    }
+                                });
+                            });
+                        }
+                        html += `</div></div>`;
+                        content.innerHTML = html;
+                    };
+
+                    window._currentDiffData = diff;
+                    window._currentDiffIds = { prevId, id };
+                    document.getElementById('snapshot-diff-ai-result').style.display = 'none';
                     
-                    if (diff.addedFiles && diff.addedFiles.length > 0) {
-                        html += `<div><strong>Added Files:</strong></div><ul>`;
-                        diff.addedFiles.forEach(f => html += `<li style="color:var(--accent-success)">+ ${f}</li>`);
-                        html += `</ul>`;
+                    if (diff.addedFiles) {
+                        diff.addedFiles.forEach(f => {
+                            fileListHTML += `<div class="diff-file-item" style="padding: 8px 15px; cursor: pointer; color: var(--accent-success); border-bottom: 1px solid var(--border-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" onclick="document.getElementById('snapshot-diff-content').innerHTML = '<div style=\\'color:var(--accent-success); font-size:1.1rem; margin-top:20px;\\'>New File: ' + '${f}' + '</div>'">+ ${f}</div>`;
+                        });
                     }
-                    if (diff.deletedFiles && diff.deletedFiles.length > 0) {
-                        html += `<div><strong>Deleted Files:</strong></div><ul>`;
-                        diff.deletedFiles.forEach(f => html += `<li style="color:var(--accent-danger)">- ${f}</li>`);
-                        html += `</ul>`;
+                    if (diff.deletedFiles) {
+                        diff.deletedFiles.forEach(f => {
+                            fileListHTML += `<div class="diff-file-item" style="padding: 8px 15px; cursor: pointer; color: var(--accent-danger); border-bottom: 1px solid var(--border-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" onclick="document.getElementById('snapshot-diff-content').innerHTML = '<div style=\\'color:var(--accent-danger); font-size:1.1rem; margin-top:20px;\\'>Deleted File: ' + '${f}' + '</div>'">- ${f}</div>`;
+                        });
                     }
-                    if (diff.modifiedFiles && diff.modifiedFiles.length > 0) {
-                        html += `<div><strong>Modified Files:</strong></div><ul>`;
-                        diff.modifiedFiles.forEach(f => html += `<li style="color:var(--accent-warning)">~ ${f.relPath} (+${f.linesAdded}, -${f.linesDeleted})</li>`);
-                        html += `</ul>`;
+                    if (diff.modifiedFiles) {
+                        diff.modifiedFiles.forEach((f, idx) => {
+                            fileListHTML += `<div class="diff-file-item" style="padding: 8px 15px; cursor: pointer; border-bottom: 1px solid var(--border-color); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" onclick="window._renderFileDiff(${idx})">~ ${f.relPath}</div>`;
+                        });
+                        window._renderFileDiff = (idx) => {
+                            renderFileDiff(diff.modifiedFiles[idx]);
+                        };
                     }
 
-                    content.innerHTML = html;
+                    if (fileListHTML === '') {
+                        fileListHTML = '<div style="padding: 15px; color: var(--text-secondary);">No changes</div>';
+                    }
+
+                    fileList.innerHTML = fileListHTML;
+                    content.innerHTML = '<div style="color: var(--text-secondary); text-align: center; margin-top: 50px;">Select a file to view its diff</div>';
                     modal.classList.remove('hidden');
+                    modal.style.display = 'flex';
                 } catch(err) {
                     alert("Diff failed: " + err);
                 }
@@ -1296,170 +1601,6 @@ async function loadSnapshotsData() {
     }
 }
 
-async function loadGuardianData() {
-    try {
-        const path = document.getElementById('guardian-path').value;
-        if (!path) return;
-        
-        const backups = await GetBackupList(path);
-        const list = document.getElementById('guardian-vault-list');
-        list.innerHTML = '';
-        
-        if (!backups || backups.length === 0) {
-            list.innerHTML = '<div class="vault-item" style="justify-content: center;"><p style="color: var(--text-secondary)">Vault is empty for this project.</p></div>';
-            return;
-        }
-
-        backups.forEach(b => {
-            const sizeMB = (b.sizeBytes / (1024*1024)).toFixed(2) + " MB";
-            const date = new Date(b.createdAt).toLocaleString();
-            
-            // Create element to add event listeners safely
-            const item = document.createElement('div');
-            item.className = 'vault-item';
-            item.innerHTML = `
-                <div class="vault-info">
-                    <div><strong style="color: var(--text-primary)">Archive ID: ${b.id}</strong> <span class="vault-tier">${b.tier}</span></div>
-                    <div style="font-size: 0.9rem; color: var(--text-secondary)">
-                        Size: ${sizeMB} &bull; Created: ${date}
-                    </div>
-                </div>
-                <div class="vault-actions">
-                    <button class="btn primary btn-edit-tier" data-id="${b.id}" data-tier="${b.tier}" title="Edit Tier" style="padding: 4px; font-size: 0.8rem;">✏️</button>
-                    <button class="btn warning btn-soft-rollback" data-id="${b.id}">Soft Rollback</button>
-                    <button class="btn danger btn-hard-rollback" data-id="${b.id}">Hard Wipe</button>
-                    <button class="btn-icon btn-delete" data-id="${b.id}" title="Delete Archive">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M3 6h18"></path><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line>
-                        </svg>
-                    </button>
-                </div>
-            `;
-            
-            list.appendChild(item);
-        });
-
-        // Add event listeners to the generated buttons
-        document.querySelectorAll('.btn-soft-rollback').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const id = parseInt(e.target.getAttribute('data-id'));
-                const path = document.getElementById('guardian-path').value;
-                if (confirm("Proceed with Soft Rollback? Current directory will be stashed and restored if extraction fails.")) {
-                    try {
-                        const originalText = e.target.innerText;
-                        e.target.innerText = "Restoring...";
-                        e.target.disabled = true;
-                        await RestoreBackup(id, path, true);
-                        e.target.innerText = originalText;
-                        e.target.disabled = false;
-                    } catch (err) {
-                        alert("Rollback failed: " + err);
-                        e.target.innerText = "Soft Rollback";
-                        e.target.disabled = false;
-                    }
-                }
-            });
-        });
-
-        document.querySelectorAll('.btn-hard-rollback').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const id = parseInt(e.target.getAttribute('data-id'));
-                const path = document.getElementById('guardian-path').value;
-                if (confirm("WARNING! Proceed with Hard Rollback? Current directory will be DESTRUCTIVELY WIPED before extraction!")) {
-                    try {
-                        const originalText = e.target.innerText;
-                        e.target.innerText = "Wiping...";
-                        e.target.disabled = true;
-                        await RestoreBackup(id, path, false);
-                        e.target.innerText = originalText;
-                        e.target.disabled = false;
-                    } catch (err) {
-                        alert("Rollback failed: " + err);
-                        e.target.innerText = "Hard Wipe";
-                        e.target.disabled = false;
-                    }
-                }
-            });
-        });
-
-        document.querySelectorAll('.btn-delete').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                // target might be the svg or path inside the button
-                const buttonElement = e.target.closest('.btn-delete');
-                const id = parseInt(buttonElement.getAttribute('data-id'));
-                if (confirm("Delete this encrypted archive? This cannot be undone.")) {
-                    try {
-                        await DeleteBackup(id);
-                        loadGuardianData();
-                    } catch (err) {
-                        alert("Delete failed: " + err);
-                    }
-                }
-            });
-        });
-
-        document.querySelectorAll('.btn-edit-tier').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const buttonElement = e.target.closest('.btn-edit-tier');
-                const id = parseInt(buttonElement.getAttribute('data-id'));
-                const oldTier = buttonElement.getAttribute('data-tier');
-                const newTier = prompt("Enter new tier (daily, weekly, monthly):", oldTier);
-                if (newTier && newTier !== oldTier) {
-                    try {
-                        await UpdateBackup(id, newTier.toLowerCase());
-                        loadGuardianData();
-                    } catch(err) {
-                        alert("Update failed: " + err);
-                    }
-                }
-            });
-        });
-
-    } catch (e) {
-        console.error("Failed to load guardian backups", e);
-    }
-}
-
-async function loadGuardianSchedules() {
-    try {
-        const schedules = await GetGuardianSchedules();
-        const tbody = document.getElementById('schedules-table-body');
-        tbody.innerHTML = '';
-        if (!schedules || schedules.length === 0) {
-            tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-secondary);">No automated schedules configured.</td></tr>';
-            return;
-        }
-
-        schedules.forEach(s => {
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td>${s.projectPath}</td>
-                <td>Every ${s.intervalHours} hours</td>
-                <td>${s.lastRun ? new Date(s.lastRun).toLocaleString() : 'Never'}</td>
-                <td>
-                    <button class="btn warning btn-delete-schedule" data-id="${s.id}" style="padding: 2px 6px;">Delete</button>
-                </td>
-            `;
-            tbody.appendChild(tr);
-        });
-
-        document.querySelectorAll('.btn-delete-schedule').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const id = parseInt(e.currentTarget.getAttribute('data-id'));
-                try {
-                    await RemoveGuardianSchedule(id);
-                    loadGuardianSchedules();
-                } catch(err) {
-                    alert("Failed to delete schedule: " + err);
-                }
-            });
-        });
-
-    } catch (e) {
-        console.error("Failed to load guardian schedules", e);
-    }
-}
-
 // ── Command Palette Logic ──
 
 const COMMANDS = [
@@ -1468,13 +1609,11 @@ const COMMANDS = [
     { name: "Go to Watcher (Productivity)", category: "Navigation", action: () => document.getElementById('nav-watcher').click() },
     { name: "Go to Pomodoro (Focus)", category: "Navigation", action: () => document.getElementById('nav-pomodoro').click() },
     { name: "Go to Snapshots", category: "Navigation", action: () => document.getElementById('nav-snapshots').click() },
-    { name: "Go to Guardian (Vault)", category: "Navigation", action: () => document.getElementById('nav-guardian').click() },
     
     { name: "Add Uptime Monitor", category: "Sentinel", action: () => { document.getElementById('nav-sentinel').click(); setTimeout(()=>document.getElementById('target-name').focus(), 100); } },
     { name: "Track New App", category: "Watcher", action: () => { document.getElementById('nav-watcher').click(); setTimeout(()=>document.getElementById('rule-name').focus(), 100); } },
     { name: "Start Pomodoro", category: "Pomodoro", action: () => { document.getElementById('nav-pomodoro').click(); document.getElementById('btn-pomodoro-start').click(); } },
     { name: "Take Project Snapshot", category: "Snapshots", action: () => { document.getElementById('nav-snapshots').click(); setTimeout(()=>document.getElementById('snapshot-msg').focus(), 100); } },
-    { name: "Create AES Backup", category: "Guardian", action: () => { document.getElementById('nav-guardian').click(); document.getElementById('btn-create-backup').click(); } },
 ];
 
 function setupCommandPalette() {
@@ -1578,4 +1717,139 @@ function setupCommandPalette() {
     overlay.addEventListener('click', (e) => {
         if (e.target === overlay) overlay.classList.add('hidden');
     });
+}
+
+window.loadPomodoroRunningApps = async function() {
+    try {
+        const apps = await window.go.main.App.GetRunningApps();
+        const wl = document.getElementById('pomodoro-whitelist');
+        const bl = document.getElementById('pomodoro-blacklist');
+        
+        // Preserve selected
+        const wlSelected = Array.from(wl.selectedOptions).map(o => o.value);
+        const blSelected = Array.from(bl.selectedOptions).map(o => o.value);
+
+        let html = '';
+        apps.forEach(app => {
+            html += `<option value="${app}">${app}</option>`;
+        });
+
+        wl.innerHTML = html;
+        bl.innerHTML = html;
+
+        // Restore selected
+        Array.from(wl.options).forEach(o => { if(wlSelected.includes(o.value)) o.selected = true; });
+        Array.from(bl.options).forEach(o => { if(blSelected.includes(o.value)) o.selected = true; });
+    } catch(err) {
+        console.error("Failed to load running apps:", err);
+    }
+};
+
+// ── Logs Module ──────────────────────────────────────────────────────────────
+// Uses a fixed-size ring buffer on the backend (max 500 entries).
+// We poll every 2s ONLY while the Logs tab is active, to avoid wasting resources.
+
+let _logsInterval = null;
+let _logsCache = []; // local copy of all fetched entries
+
+function stopLogsPolling() {
+    if (_logsInterval) {
+        clearInterval(_logsInterval);
+        _logsInterval = null;
+    }
+}
+
+function startLogsPolling() {
+    stopLogsPolling(); // clear any existing interval first
+    renderLogs();      // immediate first load
+    _logsInterval = setInterval(renderLogs, 2000);
+
+    // Attach UI control handlers (idempotent — ok to re-attach)
+    document.getElementById('logs-level-filter').onchange = renderLogsFromCache;
+    document.getElementById('btn-clear-logs').onclick = () => {
+        _logsCache = [];
+        document.getElementById('logs-stream').innerHTML = '<span style="color:#555;">Cleared. New entries will appear shortly...</span>';
+    };
+    document.getElementById('btn-copy-logs').onclick = () => {
+        const text = _logsCache.map(e => `[${e.time}] [${e.level}] (${e.caller}) ${e.message}`).join('\n');
+        navigator.clipboard.writeText(text).then(() => alert('Logs copied to clipboard!'));
+    };
+}
+
+function levelColor(level) {
+    switch (level) {
+        case 'DEBUG': return '#3abff8';
+        case 'INFO':  return '#36d399';
+        case 'WARN':  return '#fbbd23';
+        case 'ERROR': return '#f87272';
+        case 'FATAL': return '#f87272';
+        default:      return '#aaa';
+    }
+}
+
+async function renderLogs() {
+    try {
+        const entries = await GetLogs(500);
+        if (!entries) return;
+
+        // Merge new entries (avoid duplicates by checking last entry time+message)
+        if (entries.length > _logsCache.length || 
+            (entries.length > 0 && _logsCache.length > 0 && 
+             entries[entries.length-1].message !== _logsCache[_logsCache.length-1].message)) {
+            _logsCache = entries;
+        }
+
+        renderLogsFromCache();
+
+        // Update last-updated timestamp
+        document.getElementById('logs-last-updated').textContent = 
+            'Updated: ' + new Date().toLocaleTimeString();
+    } catch(err) {
+        console.error('GetLogs failed:', err);
+    }
+}
+
+function renderLogsFromCache() {
+    const filter = document.getElementById('logs-level-filter').value;
+    const stream = document.getElementById('logs-stream');
+
+    let counts = { DEBUG: 0, INFO: 0, WARN: 0, ERROR: 0, FATAL: 0 };
+    let html = '';
+
+    const entries = filter === 'ALL'
+        ? _logsCache
+        : _logsCache.filter(e => e.level === filter);
+
+    _logsCache.forEach(e => {
+        if (counts[e.level] !== undefined) counts[e.level]++;
+    });
+
+    entries.forEach(entry => {
+        const col = levelColor(entry.level);
+        const msg = entry.message
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
+        html += `<div style="display:flex; gap:10px; padding:1px 0; border-bottom:1px solid rgba(255,255,255,0.03);">` +
+            `<span style="color:#555; flex-shrink:0; min-width:75px;">${entry.time}</span>` +
+            `<span style="color:${col}; font-weight:700; flex-shrink:0; min-width:42px;">${entry.level}</span>` +
+            `<span style="color:#444; flex-shrink:0; font-size:0.72rem; min-width:170px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${entry.caller}">${entry.caller}</span>` +
+            `<span style="color:#ddd; word-break:break-word;">${msg}</span>` +
+            `</div>`;
+    });
+
+    stream.innerHTML = html || '<span style="color:#555;">No entries matching filter.</span>';
+
+    // Auto-scroll if checked
+    if (document.getElementById('logs-auto-scroll').checked) {
+        stream.scrollTop = stream.scrollHeight;
+    }
+
+    // Update stats
+    document.getElementById('logs-count-total').textContent = _logsCache.length;
+    document.getElementById('logs-count-info').textContent = counts.INFO;
+    document.getElementById('logs-count-debug').textContent = counts.DEBUG;
+    document.getElementById('logs-count-warn').textContent = counts.WARN;
+    document.getElementById('logs-count-error').textContent = (counts.ERROR || 0) + (counts.FATAL || 0);
 }

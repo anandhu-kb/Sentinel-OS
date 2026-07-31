@@ -40,8 +40,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
+	"github.com/sergi/go-diff/diffmatchpatch"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -101,11 +101,18 @@ type SnapshotInfo struct {
 	CreatedAt   string `json:"createdAt"` // RFC3339 timestamp
 }
 
-// FileDiff holds line-level change stats for one modified file between two snapshots.
+// DiffChunk represents a piece of a diff
+type DiffChunk struct {
+	Type int    `json:"type"` // -1: Delete, 0: Equal, 1: Insert
+	Text string `json:"text"`
+}
+
+// FileDiff holds line-level change stats and diff chunks for one modified file between two snapshots.
 type FileDiff struct {
-	RelPath      string `json:"relPath"`
-	LinesAdded   int    `json:"linesAdded"`
-	LinesDeleted int    `json:"linesDeleted"`
+	RelPath      string      `json:"relPath"`
+	LinesAdded   int         `json:"linesAdded"`
+	LinesDeleted int         `json:"linesDeleted"`
+	Chunks       []DiffChunk `json:"chunks"`
 }
 
 // DiffSummary is the aggregate change count across all files in a diff.
@@ -309,9 +316,26 @@ func (e *Engine) GetDiff(oldID, newID int64) (DiffResult, error) {
 		}
 
 		// Load both blobs from the content-addressable store and diff them.
-		added, deleted := e.diffBlobs(oldRow.fileHash, newRow.fileHash, oldRow.lineCount+newRow.lineCount)
+		oldContent, _ := e.loadBlob(oldRow.fileHash)
+		newContent, _ := e.loadBlob(newRow.fileHash)
+		
+		added, deleted := diffLineCount(oldContent, newContent, oldRow.lineCount+newRow.lineCount)
+		
+		dmp := diffmatchpatch.New()
+		// Convert byte slices to strings for diffing
+		diffs := dmp.DiffMain(string(oldContent), string(newContent), true)
+		diffs = dmp.DiffCleanupSemantic(diffs)
+
+		var chunks []DiffChunk
+		for _, d := range diffs {
+			chunks = append(chunks, DiffChunk{
+				Type: int(d.Type),
+				Text: d.Text,
+			})
+		}
+
 		result.ModifiedFiles = append(result.ModifiedFiles, FileDiff{
-			RelPath: path, LinesAdded: added, LinesDeleted: deleted,
+			RelPath: path, LinesAdded: added, LinesDeleted: deleted, Chunks: chunks,
 		})
 		result.Summary.LinesAdded += added
 		result.Summary.LinesDeleted += deleted
@@ -868,7 +892,7 @@ func (e *Engine) DeleteSnapshot(id int64) error {
 }
 
 // RestoreSnapshot restores a project directory to the exact state of a snapshot.
-// It uses a stash-and-swap mechanism for safety.
+// It uses an in-place replacement mechanism to avoid OS file locking issues.
 func (e *Engine) RestoreSnapshot(id int64, projectPath string) error {
 	// 1. Fetch all files for this snapshot
 	rows, err := e.db.Query(`
@@ -887,64 +911,67 @@ func (e *Engine) RestoreSnapshot(id int64, projectPath string) error {
 		content []byte
 	}
 	var files []fileData
+	snapshotFiles := make(map[string]bool)
+
 	for rows.Next() {
 		var fd fileData
 		if err := rows.Scan(&fd.relPath, &fd.content); err != nil {
 			return fmt.Errorf("error scanning file data: %w", err)
 		}
 		files = append(files, fd)
+		snapshotFiles[fd.relPath] = true
 	}
 
-	// 2. Stash the current directory
-	stashPath := projectPath + "_stash_" + time.Now().Format("20060102150405")
-	if err := os.Rename(projectPath, stashPath); err != nil {
-		// If projectPath doesn't exist, we can just proceed without stashing.
-		if !os.IsNotExist(err) {
-			return fmt.Errorf("failed to stash current directory: %w", err)
+	// 2. Delete files that are NOT in the snapshot, keeping ignored/system files.
+	filepath.WalkDir(projectPath, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
 		}
-	} else {
-		// We successfully stashed. Ensure we can restore it if we fail.
-		defer func() {
-			// If projectPath is empty or we failed, we might need to restore stash.
-			// But defer needs a way to know if we succeeded. 
-			// We'll handle restoration manually in case of error below.
-		}()
-	}
+		if path == projectPath {
+			return nil
+		}
+		if d.IsDir() {
+			if _, skip := ignoreDirs[d.Name()]; skip {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 
-	// 3. Create fresh directory
-	if err := os.MkdirAll(projectPath, 0755); err != nil {
-		_ = os.Rename(stashPath, projectPath) // attempt restore
-		return fmt.Errorf("failed to recreate project directory: %w", err)
-	}
+		relPath, relErr := filepath.Rel(projectPath, path)
+		if relErr != nil {
+			return nil
+		}
+		relPath = filepath.ToSlash(relPath)
 
-	// 4. Write all files
-	success := true
+		// Don't delete database files or running executables
+		lowerName := strings.ToLower(d.Name())
+		if lowerName == "sentinel.db" || lowerName == "sentinel.db-wal" || lowerName == "sentinel.db-shm" {
+			return nil
+		}
+		if strings.HasSuffix(lowerName, ".exe") {
+			return nil
+		}
+		// Also don't delete binary files since we never track them in snapshots
+		if _, isBin := binaryExtensions[strings.ToLower(filepath.Ext(path))]; isBin {
+			return nil
+		}
+
+		// If the file is tracked but not in the snapshot we are restoring to, delete it.
+		if !snapshotFiles[relPath] {
+			os.Remove(path)
+		}
+		return nil
+	})
+
+	// 3. Write all files from the snapshot to disk
 	for _, f := range files {
 		fullPath := filepath.Join(projectPath, f.relPath)
 		if err := os.MkdirAll(filepath.Dir(fullPath), 0755); err != nil {
-			success = false
-			break
+			return fmt.Errorf("failed to create directory for %s: %w", f.relPath, err)
 		}
 		if err := os.WriteFile(fullPath, f.content, 0644); err != nil {
-			success = false
-			break
+			return fmt.Errorf("failed to write file %s: %w", f.relPath, err)
 		}
-	}
-
-	// 5. Cleanup
-	if !success {
-		// Rollback: delete the partially created directory and restore stash
-		os.RemoveAll(projectPath)
-		if stashPath != "" {
-			os.Rename(stashPath, projectPath)
-		}
-		return fmt.Errorf("failed to write one or more files during restore")
-	}
-
-	// Restore succeeded. We can optionally delete the stash now, or leave it for the user just in case.
-	// Let's delete the stash to keep things clean.
-	if stashPath != "" {
-		_ = os.RemoveAll(stashPath)
 	}
 
 	return nil

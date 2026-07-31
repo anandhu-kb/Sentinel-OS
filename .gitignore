@@ -20,6 +20,9 @@ sentinel.db
 sentinel.key
 backup-vault/
 
+# Runtime logs (auto-generated, not part of source)
+logs/
+
 # Wails
 frontend/dist/
 frontend/node_modules/

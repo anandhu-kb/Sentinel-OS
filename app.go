@@ -6,26 +6,28 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"time"
+	"strings"
 
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/host"
 	"github.com/shirou/gopsutil/v3/mem"
+	"github.com/shirou/gopsutil/v3/net"
+	"github.com/shirou/gopsutil/v3/process"
+	"sort"
+	"os/exec"
 
 	// Internal engine packages
-	"sentinel-os/internal/guardian"
+
+	"sentinel-os/internal/ai"
+	"sentinel-os/internal/logger"
 	"sentinel-os/internal/sentinel"
 	"sentinel-os/internal/snapshot"
 	"sentinel-os/internal/watcher"
 
+	"github.com/gen2brain/beeep"
+
 	// modernc.org/sqlite is a pure-Go SQLite driver — zero CGo, zero external DLL.
-	// The blank import `_` registers the "sqlite" driver name with the standard
-	// database/sql package's driver registry.
-	//
-	// Python analogy: this is like `import sqlite3` registering itself as a
-	// backend in Django's DATABASES configuration. The blank import is the
-	// Go idiom for "load this package only for its side effects" (i.e., driver
-	// registration in init()).
 	_ "modernc.org/sqlite"
 )
 
@@ -66,9 +68,6 @@ type App struct {
 	// It uses a channel-based background worker to serialize snapshot operations.
 	snapshotEngine *snapshot.Engine
 
-	// guardianEngine is a pointer to The Guardian backup/rollback engine.
-	// It manages AES-256-GCM encrypted archives and GFS retention rotation.
-	guardianEngine *guardian.Guardian
 }
 
 // NewApp is the constructor for App. Called once in main() before wails.Run().
@@ -94,61 +93,53 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
+	// ── Phase 0: Initialize Logger ─────────────────────────────────────────────
+	if err := logger.Init("./logs"); err != nil {
+		log.Printf("[startup] WARNING: Could not init file logger: %v", err)
+	}
+	logger.Info("=== Sentinel-OS Starting Up ===")
+
 	// --- Database Initialization ---
-	// sql.Open does NOT open a real connection immediately — it validates the
-	// driver name and DSN, then returns a *sql.DB (a connection pool manager).
-	// The actual TCP/file connection is established lazily on the first query.
-	//
-	// DSN breakdown: "./sentinel.db?_journal_mode=WAL"
-	//   - "./sentinel.db"       → creates/opens the DB file in the working directory
-	//   - "_journal_mode=WAL"   → enables Write-Ahead Logging for concurrent reads
-	//                             while a write is in progress (critical: all 4 engines
-	//                             will hit the DB simultaneously from separate goroutines)
+	logger.Debug("Opening SQLite database: ./sentinel.db")
 	db, err := sql.Open("sqlite", "./sentinel.db?_journal_mode=WAL")
 	if err != nil {
-		// log.Fatalf = fmt.Printf + os.Exit(1). Used for unrecoverable errors.
-		// Analogy: `raise SystemExit` in Python with a formatted message.
-		log.Fatalf("[startup] FATAL: Could not open database: %v", err)
+		logger.Fatal("[startup] FATAL: Could not open database: %v", err)
 	}
 	a.db = db
 
 	// Ping verifies the connection is actually reachable (triggers lazy connect).
 	if err := a.db.Ping(); err != nil {
-		log.Fatalf("[startup] FATAL: Database ping failed: %v", err)
+		logger.Fatal("[startup] FATAL: Database ping failed: %v", err)
 	}
+	logger.Info("Database connected and ping successful")
 
 	// Run schema DDL — creates all tables if they don't already exist.
 	if err := a.initSchema(); err != nil {
-		log.Fatalf("[startup] FATAL: Schema initialization failed: %v", err)
+		logger.Fatal("[startup] FATAL: Schema initialization failed: %v", err)
 	}
+	logger.Info("Schema initialized successfully")
 
-	log.Println("[Sentinel-OS] Core systems online. Database ready.")
+	logger.Info("Core systems online. Starting engines...")
 
+	// ── Phase 1: The Sentinel ──────────────────────────────────────────────────
+	logger.Debug("Starting Sentinel engine (uptime monitor)")
 	a.sentinelEngine = sentinel.New(a.ctx, a.db)
 	a.sentinelEngine.Start()
+	logger.Info("Sentinel engine started")
 
 	// ── Phase 2: Start The Watcher (Productivity Telemetry) ────────────────────
+	logger.Debug("Starting Watcher engine (activity tracker)")
 	a.watcherEngine = watcher.New(a.ctx, a.db)
 	a.watcherEngine.Start()
+	logger.Info("Watcher engine started")
 
 	// ── Phase 3: Start The Snapshot Engine ────────────────────────────────
+	logger.Debug("Starting Snapshot engine (version control)")
 	a.snapshotEngine = snapshot.New(a.ctx, a.db)
 	a.snapshotEngine.Start()
+	logger.Info("Snapshot engine started")
 
-	// ── Phase 4: Start The Guardian (Cryptographic Backups) ────────────────
-	// LoadOrGenerateKey reads ./sentinel.key (32 random bytes) or creates it.
-	// WARNING: losing sentinel.key means all existing backups are unrecoverable.
-	encKey, keyErr := guardian.LoadOrGenerateKey("./sentinel.key")
-	if keyErr != nil {
-		log.Fatalf("[startup] FATAL: Guardian key init failed: %v", keyErr)
-	}
-	g, guardianErr := guardian.New(a.ctx, a.db, encKey, "./backup-vault")
-	if guardianErr != nil {
-		log.Fatalf("[startup] FATAL: Guardian init failed: %v", guardianErr)
-	}
-	a.guardianEngine = g
-	// Migration: add size_bytes column if this is an older DB (safe to ignore error)
-	a.db.Exec(`ALTER TABLE backups ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0`)
+	logger.Info("=== All systems online. Sentinel-OS is ready. ===")
 }
 
 // shutdown is called by Wails when the user closes the application window.
@@ -156,14 +147,22 @@ func (a *App) startup(ctx context.Context) {
 //
 // Analogy: Django's teardown signal handlers / Python's context manager __exit__.
 func (a *App) shutdown(ctx context.Context) {
-	log.Println("[Sentinel-OS] Shutdown signal received. Releasing resources...")
+	logger.Info("Shutdown signal received. Releasing resources...")
 	if a.db != nil {
 		if err := a.db.Close(); err != nil {
-			log.Printf("[shutdown] Warning: error closing database: %v", err)
+			logger.Error("Error closing database: %v", err)
 		} else {
-			log.Println("[Sentinel-OS] Database connection closed cleanly.")
+			logger.Info("Database connection closed cleanly.")
 		}
 	}
+	logger.Close()
+}
+
+// GetLogs returns the most recent log entries from the in-memory ring buffer.
+// limit controls how many entries to fetch (max 500, the ring buffer size).
+// This is safe to call from the frontend at any time.
+func (a *App) GetLogs(limit int) []logger.LogEntry {
+	return logger.GetRecentLogs(limit)
 }
 
 // initSchema executes DDL SQL to create all application tables idempotently.
@@ -276,23 +275,7 @@ func (a *App) initSchema() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_snapshot_files_sid ON snapshot_files(snapshot_id);
 
-	-- ── The Guardian: backup archive metadata ─────────────────────────────
-	CREATE TABLE IF NOT EXISTS backups (
-		id           INTEGER PRIMARY KEY AUTOINCREMENT,
-		project_path TEXT    NOT NULL,
-		archive_path TEXT    NOT NULL,      -- absolute path to the .zip.enc encrypted archive
-		size_bytes   INTEGER NOT NULL DEFAULT 0, -- size of the ciphertext on disk
-		tier         TEXT    NOT NULL DEFAULT 'daily'  -- GFS rotation tier
-			CHECK(tier IN ('daily', 'weekly', 'monthly')),
-		created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
-	);
 
-	CREATE TABLE IF NOT EXISTS guardian_schedules (
-		id             INTEGER PRIMARY KEY AUTOINCREMENT,
-		project_path   TEXT    NOT NULL UNIQUE,
-		interval_hours INTEGER NOT NULL,
-		last_run       DATETIME
-	);
 
 	-- ── Pomodoro Timer ──────────────────────────────────────────────────────────────────────────────
 	CREATE TABLE IF NOT EXISTS pomodoro_sessions (
@@ -310,9 +293,7 @@ func (a *App) initSchema() error {
 		return err
 	}
 
-	// Migration safety: add size_bytes to existing DBs that pre-date this column.
-	// We ignore the error because it will fail if the column already exists.
-	a.db.Exec(`ALTER TABLE backups ADD COLUMN size_bytes INTEGER NOT NULL DEFAULT 0`)
+
 	a.db.Exec(`ALTER TABLE pomodoro_sessions ADD COLUMN task_name TEXT`)
 	
 	return nil
@@ -496,6 +477,7 @@ func (a *App) GetProductivityHistory(days int) ([]watcher.HistoryEntry, error) {
 
 // AddWatcherRule adds a new classification rule to the database and reloads rules.
 func (a *App) AddWatcherRule(matchString, name, category string, isRegex bool) error {
+	logger.Info("AddWatcherRule: match=%q name=%q category=%q", matchString, name, category)
 	_, err := a.db.Exec(`INSERT INTO watcher_rules (match_string, name, category, is_regex) VALUES (?, ?, ?, ?)`, matchString, name, category, isRegex)
 	if err == nil {
 		a.watcherEngine.ReloadRules()
@@ -514,6 +496,7 @@ func (a *App) EditWatcherRule(id int64, matchString, name, category string, isRe
 
 // RemoveWatcherRule deletes a classification rule and reloads rules.
 func (a *App) RemoveWatcherRule(id int64) error {
+	logger.Info("RemoveWatcherRule: id=%d", id)
 	_, err := a.db.Exec(`DELETE FROM watcher_rules WHERE id = ?`, id)
 	if err == nil {
 		a.watcherEngine.ReloadRules()
@@ -556,12 +539,21 @@ func (a *App) GetWatcherRules() ([]watcher.Rule, error) {
 //	projectPath — absolute path to the project root directory to snapshot
 //	message     — optional human-readable label (like a commit message)
 func (a *App) CreateSnapshot(projectPath, message string) (snapshot.SnapshotInfo, error) {
-	return a.snapshotEngine.TakeSnapshot(projectPath, message)
+	logger.Info("CreateSnapshot: path=%q message=%q", projectPath, message)
+	snap, err := a.snapshotEngine.TakeSnapshot(projectPath, message)
+	if err != nil {
+		logger.Error("CreateSnapshot FAILED: %v", err)
+		return snap, err
+	}
+	logger.Info("CreateSnapshot OK: id=%d hash=%s files=%d size=%d bytes",
+		snap.ID, snap.CommitHash, snap.FileCount, snap.TotalBytes)
+	return snap, nil
 }
 
 // GetSnapshotHistory returns the N most recent snapshots for a project, newest first.
 // Each entry has: { id, projectPath, commitHash, fullHash, message, fileCount, totalBytes, createdAt }
 func (a *App) GetSnapshotHistory(projectPath string, limit int) ([]snapshot.SnapshotInfo, error) {
+	logger.Debug("GetSnapshotHistory: path=%q limit=%d", projectPath, limit)
 	return a.snapshotEngine.GetHistory(projectPath, limit)
 }
 
@@ -569,125 +561,179 @@ func (a *App) GetSnapshotHistory(projectPath string, limit int) ([]snapshot.Snap
 // oldID and newID are snapshot IDs from GetSnapshotHistory.
 // Returns: { addedFiles, deletedFiles, modifiedFiles: [{relPath, linesAdded, linesDeleted}], summary }
 func (a *App) GetSnapshotDiff(oldID, newID int64) (snapshot.DiffResult, error) {
-	return a.snapshotEngine.GetDiff(oldID, newID)
+	logger.Debug("GetSnapshotDiff: oldID=%d newID=%d", oldID, newID)
+	diff, err := a.snapshotEngine.GetDiff(oldID, newID)
+	if err != nil {
+		logger.Error("GetSnapshotDiff FAILED: %v", err)
+	}
+	return diff, err
+}
+
+// AutoGenerateCommitMessage uses AI to generate a commit message for a snapshot based on its diff.
+func (a *App) AutoGenerateCommitMessage(prevID, currentID int64, aiProvider, aiConfig string) (string, error) {
+	logger.Info("AutoGenerateCommitMessage: prevID=%d currentID=%d provider=%s", prevID, currentID, aiProvider)
+	if prevID == 0 {
+		msg := "Initial commit"
+		err := a.snapshotEngine.UpdateSnapshot(currentID, msg)
+		return msg, err
+	}
+
+	diff, err := a.snapshotEngine.GetDiff(prevID, currentID)
+	if err != nil {
+		return "", err
+	}
+
+	var diffText string
+	for _, f := range diff.ModifiedFiles {
+		diffText += fmt.Sprintf("--- a/%s\n+++ b/%s\n", f.RelPath, f.RelPath)
+		for _, c := range f.Chunks {
+			lines := strings.Split(c.Text, "\n")
+			for _, line := range lines {
+				if line == "" {
+					continue
+				}
+				if c.Type == -1 {
+					diffText += "-" + line + "\n"
+				} else if c.Type == 1 {
+					diffText += "+" + line + "\n"
+				} else {
+					diffText += " " + line + "\n"
+				}
+			}
+		}
+	}
+	for _, f := range diff.AddedFiles {
+		diffText += fmt.Sprintf("Added: %s\n", f)
+	}
+	for _, f := range diff.DeletedFiles {
+		diffText += fmt.Sprintf("Deleted: %s\n", f)
+	}
+
+	var msg string
+	if aiProvider == "ollama" {
+		msg, err = ai.GenerateCommitMessageOllama(diffText, aiConfig)
+	} else if aiProvider == "nvidia" {
+		msg, err = ai.GenerateCommitMessageNvidia(diffText, aiConfig)
+	} else {
+		msg, err = ai.GenerateCommitMessage(diffText, aiConfig)
+	}
+	if err != nil {
+		logger.Error("AutoGenerateCommitMessage FAILED: %v", err)
+		return "", err
+	}
+	logger.Info("AutoGenerateCommitMessage OK: msg=%q", msg)
+
+	err = a.snapshotEngine.UpdateSnapshot(currentID, msg)
+	return msg, err
+}
+
+// AutoGenerateAIReview uses AI to review a snapshot diff and generate an HTML summary.
+func (a *App) AutoGenerateAIReview(prevID, currentID int64, aiProvider, aiConfig string) (string, error) {
+	logger.Info("AutoGenerateAIReview: prevID=%d currentID=%d provider=%s", prevID, currentID, aiProvider)
+	if prevID == 0 {
+		logger.Debug("AutoGenerateAIReview: initial snapshot, no diff")
+		return "<b>Initial commit</b>. No diff to analyze.", nil
+	}
+
+	diff, err := a.snapshotEngine.GetDiff(prevID, currentID)
+	if err != nil {
+		return "", err
+	}
+
+	var diffText string
+	for _, f := range diff.ModifiedFiles {
+		diffText += fmt.Sprintf("--- a/%s\n+++ b/%s\n", f.RelPath, f.RelPath)
+		for _, c := range f.Chunks {
+			lines := strings.Split(c.Text, "\n")
+			for _, line := range lines {
+				if line == "" {
+					continue
+				}
+				if c.Type == -1 {
+					diffText += "-" + line + "\n"
+				} else if c.Type == 1 {
+					diffText += "+" + line + "\n"
+				} else {
+					diffText += " " + line + "\n"
+				}
+			}
+		}
+	}
+	for _, f := range diff.AddedFiles {
+		diffText += fmt.Sprintf("Added: %s\n", f)
+	}
+	for _, f := range diff.DeletedFiles {
+		diffText += fmt.Sprintf("Deleted: %s\n", f)
+	}
+
+	if aiProvider == "ollama" {
+		return ai.GenerateAIReviewOllama(diffText, aiConfig)
+	} else if aiProvider == "nvidia" {
+		return ai.GenerateAIReviewNvidia(diffText, aiConfig)
+	}
+	result, err := ai.GenerateAIReview(diffText, aiConfig)
+	if err != nil {
+		logger.Error("AutoGenerateAIReview FAILED: %v", err)
+	} else {
+		logger.Info("AutoGenerateAIReview OK: responseLen=%d chars", len(result))
+	}
+	return result, err
 }
 
 // UpdateSnapshot updates the message of an existing snapshot.
 func (a *App) UpdateSnapshot(id int64, message string) error {
+	logger.Debug("UpdateSnapshot: id=%d message=%q", id, message)
 	return a.snapshotEngine.UpdateSnapshot(id, message)
 }
 
 // DeleteSnapshot deletes an existing snapshot.
 func (a *App) DeleteSnapshot(id int64) error {
-	return a.snapshotEngine.DeleteSnapshot(id)
+	logger.Info("DeleteSnapshot: id=%d", id)
+	err := a.snapshotEngine.DeleteSnapshot(id)
+	if err != nil {
+		logger.Error("DeleteSnapshot FAILED: %v", err)
+	}
+	return err
 }
 
 // RestoreSnapshot restores the project directory to the state of the snapshot.
 func (a *App) RestoreSnapshot(id int64, projectPath string) error {
-	return a.snapshotEngine.RestoreSnapshot(id, projectPath)
-}
-
-// ── JS-Bound Methods (The Guardian API) ───────────────────────────────────────
-//
-// Called from JS as:
-//   import { CreateBackup, RestoreBackup, GetBackupList, DeleteBackup } from './wailsjs/go/main/App'
-//
-//   const backup = await CreateBackup("E:/myproject")
-//   const list   = await GetBackupList("E:/myproject")
-//   await RestoreBackup(list[0].id, "E:/myproject", true)  // soft rollback
-//   await DeleteBackup(list[0].id)
-
-// CreateBackup compresses and AES-256-GCM encrypts the entire projectPath directory
-// into the backup vault, then runs GFS rotation to prune expired archives.
-// Emits "guardian:backup_created" on success.
-//
-// Returns: { id, projectPath, archivePath, tier, sizeBytes, createdAt }
-func (a *App) CreateBackup(projectPath string) (guardian.BackupInfo, error) {
-	return a.guardianEngine.CreateBackup(projectPath)
-}
-
-// RestoreBackup decrypts and extracts a backup archive into targetDir.
-//
-//	keepCurrent = true  → Soft Rollback: current dir is stashed; restored automatically if extraction fails.
-//	keepCurrent = false → Hard Rollback: targetDir is DESTRUCTIVELY wiped before extraction.
-//
-// Emits "guardian:backup_restored" on success.
-func (a *App) RestoreBackup(backupID int64, targetDir string, keepCurrent bool) error {
-	return a.guardianEngine.RestoreBackup(backupID, targetDir, keepCurrent)
-}
-
-// GetBackupList returns all backup records for projectPath, newest first.
-// Returns: []{ id, projectPath, archivePath, tier, sizeBytes, createdAt }
-func (a *App) GetBackupList(projectPath string) ([]guardian.BackupInfo, error) {
-	return a.guardianEngine.GetBackupList(projectPath)
-}
-
-// UpdateBackup updates the tier of a backup.
-func (a *App) UpdateBackup(id int64, tier string) error {
-	return a.guardianEngine.UpdateBackup(id, tier)
-}
-
-// DeleteBackup deletes a backup archive from disk and its metadata from the database.
-// Emits "guardian:backup_deleted" on success.
-func (a *App) DeleteBackup(backupID int64) error {
-	return a.guardianEngine.DeleteBackup(backupID)
-}
-
-// ── Guardian Schedules ──
-
-// AddGuardianSchedule adds or updates an automated backup schedule for a project.
-func (a *App) AddGuardianSchedule(projectPath string, intervalHours int) error {
-	_, err := a.db.Exec(`
-		INSERT INTO guardian_schedules (project_path, interval_hours) 
-		VALUES (?, ?)
-		ON CONFLICT(project_path) DO UPDATE SET interval_hours = excluded.interval_hours
-	`, projectPath, intervalHours)
-	return err
-}
-
-// RemoveGuardianSchedule removes an automated backup schedule.
-func (a *App) RemoveGuardianSchedule(id int64) error {
-	_, err := a.db.Exec(`DELETE FROM guardian_schedules WHERE id = ?`, id)
-	return err
-}
-
-// GetGuardianSchedules returns all configured automated backup schedules.
-func (a *App) GetGuardianSchedules() ([]guardian.Schedule, error) {
-	rows, err := a.db.Query(`SELECT id, project_path, interval_hours, last_run FROM guardian_schedules`)
+	logger.Info("RestoreSnapshot: id=%d path=%q", id, projectPath)
+	err := a.snapshotEngine.RestoreSnapshot(id, projectPath)
 	if err != nil {
-		return nil, err
+		logger.Error("RestoreSnapshot FAILED: %v", err)
+	} else {
+		logger.Info("RestoreSnapshot OK")
 	}
-	defer rows.Close()
-
-	var scheds []guardian.Schedule
-	for rows.Next() {
-		var s guardian.Schedule
-		var lastRun sql.NullTime
-		if err := rows.Scan(&s.ID, &s.ProjectPath, &s.IntervalHours, &lastRun); err != nil {
-			return nil, err
-		}
-		if lastRun.Valid {
-			s.LastRun = lastRun.Time.Format(time.RFC3339)
-		}
-		scheds = append(scheds, s)
-	}
-	return scheds, nil
+	return err
 }
+
 
 // ── System Resource Monitoring ──
 
-// ResourceStats holds the current system resource usage percentages.
-type ResourceStats struct {
-	CPUPercent  float64 `json:"cpuPercent"`
-	RAMPercent  float64 `json:"ramPercent"`
-	DiskPercent float64 `json:"diskPercent"`
+type TopProcess struct {
+	Name   string  `json:"name"`
+	CPU    float64 `json:"cpu"`
+	Memory float32 `json:"memory"`
 }
 
-// GetSystemResources retrieves the current CPU, RAM, and Disk usage across the OS.
+type ResourceStats struct {
+	CPUPercent   float64      `json:"cpuPercent"`
+	RAMPercent   float64      `json:"ramPercent"`
+	DiskPercent  float64      `json:"diskPercent"`
+	NetUpload    uint64       `json:"netUpload"`
+	NetDownload  uint64       `json:"netDownload"`
+	TopProcesses []TopProcess `json:"topProcesses"`
+	HostOS       string       `json:"hostOs"`
+	HostUptime   uint64       `json:"hostUptime"`
+	HostBootTime uint64       `json:"hostBootTime"`
+}
+
+// GetSystemResources retrieves the current CPU, RAM, Disk, Net, Top Processes, and Host info.
 func (a *App) GetSystemResources() (ResourceStats, error) {
 	var stats ResourceStats
 
-	// CPU (overall percentage, 0 means all CPUs, false means non-percpu)
+	// CPU
 	c, err := cpu.Percent(0, false)
 	if err == nil && len(c) > 0 {
 		stats.CPUPercent = c[0]
@@ -699,7 +745,15 @@ func (a *App) GetSystemResources() (ResourceStats, error) {
 		stats.RAMPercent = v.UsedPercent
 	}
 
-	// Disk (checking C: drive on Windows, fallback to / on Linux)
+	// Host
+	h, err := host.Info()
+	if err == nil {
+		stats.HostOS = h.Platform + " " + h.PlatformVersion
+		stats.HostUptime = h.Uptime
+		stats.HostBootTime = h.BootTime
+	}
+
+	// Disk
 	diskPath := "C:\\"
 	if _, err := os.Stat(diskPath); os.IsNotExist(err) {
 		diskPath = "/"
@@ -707,6 +761,35 @@ func (a *App) GetSystemResources() (ResourceStats, error) {
 	d, err := disk.Usage(diskPath)
 	if err == nil {
 		stats.DiskPercent = d.UsedPercent
+	}
+	
+	// Network
+	netStats, err := net.IOCounters(false)
+	if err == nil && len(netStats) > 0 {
+		stats.NetUpload = netStats[0].BytesSent
+		stats.NetDownload = netStats[0].BytesRecv
+	}
+	
+	// Top Processes
+	procs, err := process.Processes()
+	if err == nil {
+		var procStats []TopProcess
+		for _, p := range procs {
+			name, _ := p.Name()
+			cpuP, _ := p.CPUPercent()
+			memP, _ := p.MemoryPercent()
+			if cpuP > 0.1 || memP > 0.1 {
+				procStats = append(procStats, TopProcess{Name: name, CPU: cpuP, Memory: memP})
+			}
+		}
+		sort.Slice(procStats, func(i, j int) bool {
+			return procStats[i].CPU > procStats[j].CPU
+		})
+		limit := 5
+		if len(procStats) < limit {
+			limit = len(procStats)
+		}
+		stats.TopProcesses = procStats[:limit]
 	}
 
 	return stats, nil
@@ -725,23 +808,41 @@ type PomodoroSession struct {
 
 // StartPomodoro starts a new session and returns its ID
 func (a *App) StartPomodoro(durationMinutes int, taskName string) (int64, error) {
+	logger.Info("StartPomodoro: duration=%d task=%q", durationMinutes, taskName)
 	res, err := a.db.Exec(`INSERT INTO pomodoro_sessions (duration_minutes, status, task_name) VALUES (?, 'running', ?)`, durationMinutes, taskName)
 	if err != nil {
+		logger.Error("StartPomodoro FAILED: %v", err)
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, _ := res.LastInsertId()
+	logger.Debug("StartPomodoro OK: sessionID=%d", id)
+	return id, nil
 }
 
 // CompletePomodoro marks a session as completed
 func (a *App) CompletePomodoro(id int64) error {
+	logger.Info("CompletePomodoro: id=%d", id)
 	_, err := a.db.Exec(`UPDATE pomodoro_sessions SET status = 'completed', end_time = CURRENT_TIMESTAMP WHERE id = ?`, id)
+	if err != nil {
+		logger.Error("CompletePomodoro FAILED: %v", err)
+	}
 	return err
 }
 
 // CancelPomodoro marks a session as cancelled
 func (a *App) CancelPomodoro(id int64) error {
+	logger.Info("CancelPomodoro: id=%d", id)
 	_, err := a.db.Exec(`UPDATE pomodoro_sessions SET status = 'cancelled', end_time = CURRENT_TIMESTAMP WHERE id = ?`, id)
+	if err != nil {
+		logger.Error("CancelPomodoro FAILED: %v", err)
+	}
 	return err
+}
+
+// TriggerDistractionAlert fires a native OS notification.
+func (a *App) TriggerDistractionAlert() error {
+	logger.Warn("TriggerDistractionAlert: distraction detected during focus session")
+	return beeep.Alert("Sentinel-OS", "Distraction detected! Get back to work!", "")
 }
 
 // GetPomodoroHistory retrieves the last 50 pomodoro sessions
@@ -767,4 +868,37 @@ func (a *App) GetPomodoroHistory() ([]PomodoroSession, error) {
 		sessions = append(sessions, s)
 	}
 	return sessions, nil
+}
+
+// GetRunningApps uses the Windows tasklist command to get a list of currently running unique .exe names.
+func (a *App) GetRunningApps() ([]string, error) {
+	cmd := exec.Command("tasklist", "/FO", "CSV", "/NH")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	
+	appMap := make(map[string]bool)
+	lines := strings.Split(string(out), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		// tasklist CSV format: "Image Name","PID","Session Name","Session#","Mem Usage"
+		parts := strings.SplitN(line, ",", 2)
+		if len(parts) > 0 {
+			appName := strings.Trim(parts[0], `"`)
+			if strings.HasSuffix(strings.ToLower(appName), ".exe") {
+				appMap[appName] = true
+			}
+		}
+	}
+	
+	var apps []string
+	for app := range appMap {
+		apps = append(apps, app)
+	}
+	sort.Strings(apps)
+	return apps, nil
 }

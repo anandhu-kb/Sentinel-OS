@@ -1,43 +1,21 @@
-export namespace guardian {
+export namespace logger {
 	
-	export class BackupInfo {
-	    id: number;
-	    projectPath: string;
-	    archivePath: string;
-	    tier: string;
-	    sizeBytes: number;
-	    createdAt: string;
+	export class LogEntry {
+	    time: string;
+	    level: string;
+	    caller: string;
+	    message: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new BackupInfo(source);
+	        return new LogEntry(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.projectPath = source["projectPath"];
-	        this.archivePath = source["archivePath"];
-	        this.tier = source["tier"];
-	        this.sizeBytes = source["sizeBytes"];
-	        this.createdAt = source["createdAt"];
-	    }
-	}
-	export class Schedule {
-	    id: number;
-	    projectPath: string;
-	    intervalHours: number;
-	    lastRun: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new Schedule(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.projectPath = source["projectPath"];
-	        this.intervalHours = source["intervalHours"];
-	        this.lastRun = source["lastRun"];
+	        this.time = source["time"];
+	        this.level = source["level"];
+	        this.caller = source["caller"];
+	        this.message = source["message"];
 	    }
 	}
 
@@ -67,10 +45,32 @@ export namespace main {
 	        this.taskName = source["taskName"];
 	    }
 	}
+	export class TopProcess {
+	    name: string;
+	    cpu: number;
+	    memory: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TopProcess(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.cpu = source["cpu"];
+	        this.memory = source["memory"];
+	    }
+	}
 	export class ResourceStats {
 	    cpuPercent: number;
 	    ramPercent: number;
 	    diskPercent: number;
+	    netUpload: number;
+	    netDownload: number;
+	    topProcesses: TopProcess[];
+	    hostOs: string;
+	    hostUptime: number;
+	    hostBootTime: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ResourceStats(source);
@@ -81,8 +81,33 @@ export namespace main {
 	        this.cpuPercent = source["cpuPercent"];
 	        this.ramPercent = source["ramPercent"];
 	        this.diskPercent = source["diskPercent"];
+	        this.netUpload = source["netUpload"];
+	        this.netDownload = source["netDownload"];
+	        this.topProcesses = this.convertValues(source["topProcesses"], TopProcess);
+	        this.hostOs = source["hostOs"];
+	        this.hostUptime = source["hostUptime"];
+	        this.hostBootTime = source["hostBootTime"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
+	
 	export class UptimeLogRow {
 	    id: number;
 	    target: string;
@@ -137,6 +162,20 @@ export namespace sentinel {
 
 export namespace snapshot {
 	
+	export class DiffChunk {
+	    type: number;
+	    text: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DiffChunk(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.text = source["text"];
+	    }
+	}
 	export class DiffSummary {
 	    filesAdded: number;
 	    filesDeleted: number;
@@ -161,6 +200,7 @@ export namespace snapshot {
 	    relPath: string;
 	    linesAdded: number;
 	    linesDeleted: number;
+	    chunks: DiffChunk[];
 	
 	    static createFrom(source: any = {}) {
 	        return new FileDiff(source);
@@ -171,7 +211,26 @@ export namespace snapshot {
 	        this.relPath = source["relPath"];
 	        this.linesAdded = source["linesAdded"];
 	        this.linesDeleted = source["linesDeleted"];
+	        this.chunks = this.convertValues(source["chunks"], DiffChunk);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class DiffResult {
 	    oldSnapshotId: number;

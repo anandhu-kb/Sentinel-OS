@@ -30,9 +30,13 @@
                 <li class="nav-item" id="nav-snapshots" data-target="snapshots-view">
                     <span class="icon">📸</span> Snapshots
                 </li>
-                <li class="nav-item" id="nav-guardian" data-target="guardian-view">
-                    <span class="icon">🛡️</span> Guardian
+                <li class="nav-item" id="nav-logs" data-target="logs-view">
+                    <span class="icon">🪵</span> Logs
                 </li>
+                <li class="nav-item" id="nav-settings" data-target="settings-view">
+                    <span class="icon">⚙️</span> Settings
+                </li>
+
             </ul>
         </nav>
 
@@ -94,43 +98,65 @@
                     </div>
                 </section>
 
-                <!-- Resources View (Live System Metrics) -->
-                <section id="resources-view" class="view hidden">
-                    <div class="view-header">
-                        <h2>System Resources</h2>
+                <section id="resources-view" class="view hidden" style="padding-bottom: 50px;">
+                    <div class="view-header" style="margin-bottom: 25px; display: flex; justify-content: space-between; align-items: center;">
+                        <h2>System Resources Dashboard</h2>
+                        <div id="sys-host-info" style="font-size: 0.95rem; color: var(--text-secondary); padding: 5px 12px; border-radius: 20px; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color);">Loading system information...</div>
                     </div>
-                    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));">
+                    
+                    <div class="grid" style="grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 25px; margin-bottom: 25px;">
                         
-                        <div class="card" style="display: flex; flex-direction: column; justify-content: space-between;">
-                            <div style="display:flex; justify-content: space-between; margin-bottom: 20px;">
-                                <span style="font-size: 1.2rem; font-weight: 600;">CPU Usage</span>
-                                <strong id="sys-cpu-text" style="color: var(--accent-primary); font-size: 1.5rem;">0%</strong>
-                            </div>
-                            <div style="width: 100%; height: 16px; background: var(--bg-dark); border-radius: 8px; overflow: hidden;">
-                                <div id="sys-cpu-bar" style="width: 0%; height: 100%; background: var(--accent-primary); transition: width 0.1s linear;"></div>
+                        <div class="card" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 25px; background: linear-gradient(180deg, var(--bg-secondary) 0%, rgba(30,30,40,0.5) 100%);">
+                            <span style="font-size: 1.1rem; font-weight: 600; margin-bottom: 15px; color: var(--text-primary);">CPU Usage</span>
+                            <div style="position: relative; width: 120px; height: 120px;">
+                                <svg width="120" height="120" viewBox="0 0 120 120" style="transform: rotate(-90deg);">
+                                    <circle cx="60" cy="60" r="50" fill="none" stroke="var(--bg-dark)" stroke-width="10" />
+                                    <circle id="sys-cpu-ring" cx="60" cy="60" r="50" fill="none" stroke="var(--accent-primary)" stroke-width="10" stroke-dasharray="314" stroke-dashoffset="314" stroke-linecap="round" style="transition: stroke-dashoffset 0.5s ease; filter: drop-shadow(0 0 8px rgba(88,101,242,0.6));" />
+                                </svg>
+                                <div id="sys-cpu-text" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; font-weight: bold; color: var(--accent-primary);">0%</div>
                             </div>
                         </div>
 
-                        <div class="card" style="display: flex; flex-direction: column; justify-content: space-between;">
-                            <div style="display:flex; justify-content: space-between; margin-bottom: 20px;">
-                                <span style="font-size: 1.2rem; font-weight: 600;">Memory Usage</span>
-                                <strong id="sys-ram-text" style="color: var(--accent-purple); font-size: 1.5rem;">0%</strong>
-                            </div>
-                            <div style="width: 100%; height: 16px; background: var(--bg-dark); border-radius: 8px; overflow: hidden;">
-                                <div id="sys-ram-bar" style="width: 0%; height: 100%; background: var(--accent-purple); transition: width 0.1s linear;"></div>
+                        <div class="card" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 25px; background: linear-gradient(180deg, var(--bg-secondary) 0%, rgba(30,30,40,0.5) 100%);">
+                            <span style="font-size: 1.1rem; font-weight: 600; margin-bottom: 15px; color: var(--text-primary);">Memory Usage</span>
+                            <div style="position: relative; width: 120px; height: 120px;">
+                                <svg width="120" height="120" viewBox="0 0 120 120" style="transform: rotate(-90deg);">
+                                    <circle cx="60" cy="60" r="50" fill="none" stroke="var(--bg-dark)" stroke-width="10" />
+                                    <circle id="sys-ram-ring" cx="60" cy="60" r="50" fill="none" stroke="var(--accent-purple)" stroke-width="10" stroke-dasharray="314" stroke-dashoffset="314" stroke-linecap="round" style="transition: stroke-dashoffset 0.5s ease; filter: drop-shadow(0 0 8px rgba(138,43,226,0.6));" />
+                                </svg>
+                                <div id="sys-ram-text" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; font-weight: bold; color: var(--accent-purple);">0%</div>
                             </div>
                         </div>
 
-                        <div class="card" style="display: flex; flex-direction: column; justify-content: space-between;">
-                            <div style="display:flex; justify-content: space-between; margin-bottom: 20px;">
-                                <span style="font-size: 1.2rem; font-weight: 600;">Disk Storage (C:)</span>
-                                <strong id="sys-disk-text" style="color: var(--accent-success); font-size: 1.5rem;">0%</strong>
-                            </div>
-                            <div style="width: 100%; height: 16px; background: var(--bg-dark); border-radius: 8px; overflow: hidden;">
-                                <div id="sys-disk-bar" style="width: 0%; height: 100%; background: var(--accent-success); transition: width 0.1s linear;"></div>
+                        <div class="card" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 25px; background: linear-gradient(180deg, var(--bg-secondary) 0%, rgba(30,30,40,0.5) 100%);">
+                            <span style="font-size: 1.1rem; font-weight: 600; margin-bottom: 15px; color: var(--text-primary);">Disk (C:)</span>
+                            <div style="position: relative; width: 120px; height: 120px;">
+                                <svg width="120" height="120" viewBox="0 0 120 120" style="transform: rotate(-90deg);">
+                                    <circle cx="60" cy="60" r="50" fill="none" stroke="var(--bg-dark)" stroke-width="10" />
+                                    <circle id="sys-disk-ring" cx="60" cy="60" r="50" fill="none" stroke="var(--accent-success)" stroke-width="10" stroke-dasharray="314" stroke-dashoffset="314" stroke-linecap="round" style="transition: stroke-dashoffset 0.5s ease; filter: drop-shadow(0 0 8px rgba(0,230,118,0.6));" />
+                                </svg>
+                                <div id="sys-disk-text" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; font-weight: bold; color: var(--accent-success);">0%</div>
                             </div>
                         </div>
-                        
+
+                        <div class="card" style="display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 25px; background: linear-gradient(180deg, var(--bg-secondary) 0%, rgba(30,30,40,0.5) 100%);">
+                            <span style="font-size: 1.1rem; font-weight: 600; margin-bottom: 25px; color: var(--text-primary);">Network I/O</span>
+                            <div style="width: 100%; text-align: center; font-weight: bold; display: flex; flex-direction: column; gap: 15px;">
+                                <div style="color: #4da6ff; font-size: 1.4rem; display: flex; align-items: center; justify-content: center; gap: 10px;">
+                                    <span style="font-size: 1.2rem;">⬆️</span> <span id="sys-net-up">0 B/s</span>
+                                </div>
+                                <div style="color: #ff9933; font-size: 1.4rem; display: flex; align-items: center; justify-content: center; gap: 10px;">
+                                    <span style="font-size: 1.2rem;">⬇️</span> <span id="sys-net-down">0 B/s</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card" style="background: var(--bg-secondary); padding: 25px;">
+                        <h3 style="margin-top:0; margin-bottom: 20px;">Top Processes</h3>
+                        <div id="sys-top-processes" style="display: flex; flex-direction: column; gap: 12px; max-height: 400px; overflow-y: auto; padding-right: 10px;">
+                            <div style="text-align: center; color: var(--text-secondary);">Loading processes...</div>
+                        </div>
                     </div>
                 </section>
 
@@ -177,133 +203,139 @@
                             </table>
                         </div>
                     </div>
+                    <div class="chart-container" style="margin-top: 20px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                            <h3>Distraction Blocker Configuration</h3>
+                            <select id="pomodoro-blocker-mode" style="background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 8px;">
+                                <option value="category" selected>Strict (Categories)</option>
+                                <option value="whitelist">Whitelist Mode</option>
+                                <option value="blacklist">Blacklist Mode</option>
+                            </select>
+                        </div>
+                        <div id="pomodoro-whitelist-container" style="display: none; margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <label style="font-size: 0.9rem; color: var(--accent-success);">Whitelist (Only these apps are allowed)</label>
+                                <button class="btn primary" style="padding: 2px 8px; font-size: 0.8rem;" onclick="loadPomodoroRunningApps()">↻ Refresh Apps</button>
+                            </div>
+                            <select id="pomodoro-whitelist" multiple style="width: 100%; height: 120px; border: 1px solid var(--accent-success); background: var(--bg-dark); color: var(--text-primary); border-radius: 4px; padding: 5px;">
+                            </select>
+                            <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 5px;">Hold Ctrl (or Cmd) to select multiple apps.</p>
+                        </div>
+                        <div id="pomodoro-blacklist-container" style="display: none;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                                <label style="font-size: 0.9rem; color: var(--accent-danger);">Blacklist (These apps are strictly forbidden)</label>
+                                <button class="btn primary" style="padding: 2px 8px; font-size: 0.8rem;" onclick="loadPomodoroRunningApps()">↻ Refresh Apps</button>
+                            </div>
+                            <select id="pomodoro-blacklist" multiple style="width: 100%; height: 120px; border: 1px solid var(--accent-danger); background: var(--bg-dark); color: var(--text-primary); border-radius: 4px; padding: 5px;">
+                            </select>
+                            <p style="font-size: 0.75rem; color: var(--text-secondary); margin-top: 5px;">Hold Ctrl (or Cmd) to select multiple apps.</p>
+                        </div>
+                        <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 10px;">By default (Strict), the distraction blocker will alert you if you open any app outside the 'IDE / Code', 'Terminal', or 'Productivity' categories.</p>
+                    </div>
                 </section>
 
                 <!-- Watcher View (Productivity Telemetry) -->
-                <section id="watcher-view" class="view hidden">
-                    <div class="view-header">
+                <section id="watcher-view" class="view hidden" style="padding-bottom: 50px;">
+                    <div class="view-header" style="display: flex; justify-content: space-between; align-items: center;">
                         <h2>Productivity Telemetry</h2>
+                        <div class="category-badge" id="active-window-category" style="font-size: 0.9rem; padding: 5px 12px; border-radius: 20px; background: rgba(88, 101, 242, 0.2); border: 1px solid var(--accent-primary);">Unknown</div>
                     </div>
-                    <div class="banner" style="margin-bottom: 20px;">
-                        <div class="banner-title">Active Window: <strong id="active-window-title">Initializing...</strong></div>
-                        <div class="category-badge" id="active-window-category">Unknown</div>
+                    
+                    <!-- Active Window Banner (Premium) -->
+                    <div class="card" style="margin-bottom: 25px; padding: 25px; background: linear-gradient(135deg, rgba(88,101,242,0.1) 0%, rgba(30,30,40,0.8) 100%); border-left: 4px solid var(--accent-primary); display: flex; align-items: center; justify-content: space-between; box-shadow: 0 8px 32px rgba(0,0,0,0.2);">
+                        <div>
+                            <div style="font-size: 0.9rem; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 5px;">Currently Focused</div>
+                            <div style="font-size: 1.4rem; font-weight: bold; color: #fff;" id="active-window-title">Initializing...</div>
+                        </div>
+                        <div class="pulse-dot" style="width: 15px; height: 15px; background: var(--accent-success);"></div>
                     </div>
 
-                    <div style="margin-top: 20px;">
-                        <h3 style="margin-bottom: 10px;">Track New App / Task</h3>
-                        <form id="add-rule-form" class="inline-form" style="margin-bottom: 15px;">
+                    <!-- Track New App -->
+                    <div class="card" style="margin-bottom: 25px;">
+                        <h3 style="margin-top:0; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;"><span class="icon">➕</span> Track New App / Task</h3>
+                        <form id="add-rule-form" class="inline-form">
                             <input type="hidden" id="rule-id" value="">
                             <select id="rule-match" style="flex: 1;" required>
                                 <option value="" disabled selected>Select an unmapped program...</option>
-                                <!-- Populated by JS -->
                             </select>
-                            <input type="text" id="rule-name" placeholder="App Name (e.g. 'VS Code')" required>
-                            <input type="text" id="rule-category" placeholder="Category (e.g. 'IDE')" required>
+                            <input type="text" id="rule-name" placeholder="App Name (e.g. 'VS Code')" required style="width: 200px;">
+                            <input type="text" id="rule-category" placeholder="Category (e.g. 'IDE')" required style="width: 150px;">
                             <button type="submit" id="btn-save-rule" class="btn primary">Track App</button>
                             <button type="button" id="btn-cancel-rule-edit" class="btn warning hidden" style="display:none;">Cancel</button>
                         </form>
-                        <div class="grid" id="rules-grid" style="grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); margin-bottom: 20px;">
+                    </div>
+
+                    <!-- Mapped Apps Configuration -->
+                    <div class="card" style="margin-bottom: 25px;">
+                        <h3 style="margin-top:0; margin-bottom: 15px; display: flex; align-items: center; gap: 8px;"><span class="icon">⚙️</span> Mapped Programs</h3>
+                        <div id="rules-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px;">
                             <!-- Rules injected here -->
                         </div>
                     </div>
 
-                    <div style="display:flex; gap: 20px;">
-                        <!-- Left Column: Pie Chart and Bars -->
-                        <div class="chart-container" style="flex: 1;">
-                            <h3 style="margin-bottom: 15px;">Today's Focus Time</h3>
-                            <div style="display: flex; gap: 20px; align-items: flex-start; margin-bottom: 20px;">
-                                <div id="watcher-pie-chart" style="width: 150px; height: 150px; border-radius: 50%; background: conic-gradient(var(--bg-tertiary) 100%);"></div>
-                                <div style="flex: 1;">
-                                    <table class="table" style="width: 100%; font-size: 0.9rem;">
-                                        <thead>
-                                            <tr>
-                                                <th>App</th>
-                                                <th>Time</th>
-                                                <th>%</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="watcher-pie-legend-table">
-                                            <!-- Legend table injected here -->
-                                        </tbody>
-                                    </table>
-                                </div>
+                    <div style="display:flex; gap: 25px; flex-wrap: wrap; margin-bottom: 25px;">
+                        <!-- Left: Today's Focus -->
+                        <div class="card" style="flex: 1; min-width: 350px; background: var(--bg-secondary);">
+                            <h3 style="margin-top:0; margin-bottom: 20px;">Today's Focus Time</h3>
+                            <div id="watcher-pie-legend" style="display: flex; flex-direction: column; gap: 12px; max-height: 300px; overflow-y: auto; padding-right: 10px;">
+                                <!-- Bars injected here -->
                             </div>
                         </div>
                         
-                        <!-- Right Column: Recent Tasks -->
-                        <div style="flex: 1;">
-                            <h3 style="margin-bottom: 15px;">Recent Tasks</h3>
-                            <div id="watcher-recent-tasks" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 15px;">
-                                <!-- Cards injected here -->
+                        <!-- Right: All Time Summary -->
+                        <div class="card" style="flex: 1; min-width: 350px; background: var(--bg-secondary);">
+                            <h3 style="margin-top:0; margin-bottom: 20px;">All Time Summary</h3>
+                            <div id="watcher-all-time-pie" style="display: none;"></div>
+                            <div id="all-time-summary-tbody" style="display: flex; flex-direction: column; gap: 12px; max-height: 300px; overflow-y: auto; padding-right: 10px;">
+                                <!-- Bars injected here -->
                             </div>
                         </div>
                     </div>
 
-                    <div class="chart-container" style="margin-top: 20px;" id="watcher-history">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-                            <h3>Detailed History</h3>
-                            <select id="watcher-task-select" style="background: var(--bg-tertiary); color: var(--text-primary); border: 1px solid var(--border-color); border-radius: 4px; padding: 4px 8px;">
+                    <div class="card" id="watcher-history">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                            <h3 style="margin:0;">Activity Timeline & Logs</h3>
+                            <select id="watcher-task-select" class="input" style="padding: 6px 12px; min-width: 200px;">
                                 <option value="all">All Tasks</option>
-                                <!-- Options injected here by main.js -->
                             </select>
                         </div>
                         
-                        <!-- Tabs -->
-                        <div style="display: flex; gap: 10px; margin-bottom: 15px; border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">
+                        <div style="display: flex; gap: 15px; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 15px;">
+                            <button class="btn primary" id="tab-btn-timeline">Daily Timeline</button>
                             <button class="btn secondary" id="tab-btn-summary">Daily Summary</button>
-                            <button class="btn primary" id="tab-btn-detailed">Detailed Logs</button>
+                            <button class="btn secondary" id="tab-btn-detailed">Detailed Logs</button>
                         </div>
 
-                        <div id="watcher-history-content">
-                            <!-- History table/histogram injected here -->
+                        <div id="watcher-history-content" style="display: none; flex-direction: column; gap: 15px;">
+                            <!-- History injected here -->
                         </div>
-                        
                         <div id="watcher-detailed-logs-content" style="display: none;">
-                            <div class="table-container">
-                                <table class="table" style="width: 100%;">
-                                    <thead>
-                                        <tr>
-                                            <th>NAME</th>
-                                            <th>DATE</th>
-                                            <th>TIME STARTED</th>
-                                            <th>TIME ENDED</th>
-                                            <th>FOCUS TIME</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="detailed-logs-tbody">
-                                    </tbody>
-                                </table>
+                            <div id="detailed-logs-grid" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 15px;">
                             </div>
                         </div>
-                    </div>
-
-                    <!-- All Time Summary -->
-                    <div class="chart-container" style="margin-top: 20px;">
-                        <h3 style="margin-bottom: 15px;">All Time Summary</h3>
-                        <div style="display:flex; gap: 20px;">
-                            <div style="flex: 1;">
-                                <div id="watcher-all-time-pie" style="width: 200px; height: 200px; border-radius: 50%; background: conic-gradient(var(--bg-tertiary) 100%); margin: 0 auto;"></div>
-                            </div>
-                            <div style="flex: 2;">
-                                <div class="table-container">
-                                    <table class="table" style="width: 100%; font-size: 0.9rem;">
-                                        <thead>
-                                            <tr>
-                                                <th>APP NAME</th>
-                                                <th>CATEGORY</th>
-                                                <th>FIRST STARTED</th>
-                                                <th>LAST ENDED</th>
-                                                <th>TOTAL FOCUS TIME</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody id="all-time-summary-tbody">
-                                            <!-- Aggregated historical data -->
-                                        </tbody>
-                                    </table>
+                        <div id="watcher-timeline-content" style="display: block;">
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px;">
+                                <span style="font-size: 0.9rem; color: var(--text-secondary);">Today's Timeline (24h)</span>
+                                <div style="display: flex; gap: 10px; font-size: 0.8rem;">
+                                    <span style="display: flex; align-items: center; gap: 4px;"><div style="width: 10px; height: 10px; background: var(--accent-success); border-radius: 2px;"></div> Productive</span>
+                                    <span style="display: flex; align-items: center; gap: 4px;"><div style="width: 10px; height: 10px; background: var(--accent-danger); border-radius: 2px;"></div> Unproductive</span>
+                                    <span style="display: flex; align-items: center; gap: 4px;"><div style="width: 10px; height: 10px; background: var(--accent-warning); border-radius: 2px;"></div> Neutral</span>
                                 </div>
                             </div>
+                            <div id="timeline-container" style="position: relative; height: 60px; background: var(--bg-dark); border-radius: 8px; margin-top: 5px; overflow: hidden; border: 1px solid var(--border-color);">
+                                <!-- Timeline blocks injected here -->
+                            </div>
+                            <div style="display: flex; justify-content: space-between; font-size: 0.75rem; color: var(--text-secondary); margin-top: 5px;">
+                                <span>12:00 AM</span>
+                                <span>06:00 AM</span>
+                                <span>12:00 PM</span>
+                                <span>06:00 PM</span>
+                                <span>11:59 PM</span>
+                            </div>
                         </div>
                     </div>
+
+
                 </section>
 
                 <!-- Snapshots View (Version Control) -->
@@ -333,54 +365,123 @@
                         </tbody>
                     </table>
 
-                    <div id="snapshot-diff-modal" class="hidden" style="margin-top: 20px; border: 1px solid var(--border-color); padding: 15px; border-radius: 8px;">
-                        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px;">
-                            <h3>Diff Preview</h3>
-                            <button id="btn-close-diff" class="btn warning">Close</button>
-                        </div>
-                        <div id="snapshot-diff-content" style="max-height: 400px; overflow-y: auto; background: var(--bg-darker); padding: 10px; border-radius: 4px; font-family: monospace; font-size: 0.85rem;">
-                            <!-- Diff will be rendered here -->
+                    <div id="snapshot-diff-modal" class="hidden" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); z-index: 9999; display: flex; align-items: center; justify-content: center; backdrop-filter: blur(5px);">
+                        <div style="background: var(--bg-secondary); border: 1px solid var(--border-color); border-radius: 12px; padding: 25px; width: 90vw; height: 90vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,0.5);">
+                            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px; border-bottom: 1px solid var(--border-color); padding-bottom: 15px;">
+                                <div style="display: flex; align-items: center; gap: 20px;">
+                                    <h2 style="margin: 0; color: var(--text-primary); display: flex; align-items: center; gap: 10px;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M11.5 21h-2a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2h-1.5"/><path d="m15 18-3 3-3-3"/><path d="M12 11v10"/></svg> Changes in Snapshot</h2>
+                                    <button id="btn-diff-ai-review" class="btn primary" style="padding: 5px 15px; font-size: 0.9rem;">🤖 AI Review (Summary & Syntax)</button>
+                                </div>
+                                <button id="btn-close-diff" class="btn warning">✕ Close</button>
+                            </div>
+                            <!-- AI Review Result Box -->
+                            <div id="snapshot-diff-ai-result" style="display:none; margin-bottom: 20px; padding: 15px; border-radius: 8px; background: rgba(88, 101, 242, 0.1); border: 1px solid var(--accent-primary); color: var(--text-primary); max-height: 250px; overflow-y: auto;">
+                            </div>
+
+                            <div style="display: flex; flex: 1; min-height: 0; gap: 20px;">
+                                <!-- Left side: File List -->
+                                <div id="snapshot-diff-file-list" style="width: 300px; background: var(--bg-dark); border-radius: 8px; border: 1px solid var(--border-color); overflow-y: auto;">
+                                    <!-- Injected by JS -->
+                                </div>
+                                <!-- Right side: Diff Viewer -->
+                                <div id="snapshot-diff-content" style="flex: 1; background: var(--bg-darker); padding: 15px; border-radius: 8px; font-family: 'Consolas', 'Courier New', monospace; font-size: 0.9rem; border: 1px solid var(--border-color); overflow-y: auto; overflow-x: auto; white-space: pre;">
+                                    <div style="color: var(--text-secondary); text-align: center; margin-top: 50px;">Select a file to view its diff</div>
+                                </div>
+                            </div>
                         </div>
                     </div>
                 </section>
 
-                <!-- Guardian View (Cryptographic Vault) -->
-                <section id="guardian-view" class="view hidden">
-                    <div class="view-header">
-                        <h2>Cryptographic Vault</h2>
-                        <div class="inline-form">
-                            <input type="text" id="guardian-path" placeholder="Project Path (e.g., E:/myproject)" value="E:/Vscode/go/Sentinel-OS">
-                            <button id="btn-create-backup" class="btn primary">🔒 Create AES Backup</button>
+                <!-- Logger View -->
+                <section id="logs-view" class="view hidden">
+                    <div class="view-header" style="display:flex; align-items:center; justify-content:space-between;">
+                        <h2>🪵 Debug Logs</h2>
+                        <div style="display:flex; gap:10px; align-items:center;">
+                            <select id="logs-level-filter" class="input" style="padding:5px 10px; font-size:0.85rem;">
+                                <option value="ALL">All Levels</option>
+                                <option value="DEBUG">DEBUG</option>
+                                <option value="INFO">INFO</option>
+                                <option value="WARN">WARN</option>
+                                <option value="ERROR">ERROR</option>
+                            </select>
+                            <label style="display:flex; align-items:center; gap:6px; font-size:0.85rem; cursor:pointer;">
+                                <input type="checkbox" id="logs-auto-scroll" checked> Auto-scroll
+                            </label>
+                            <button id="btn-clear-logs" class="btn" style="padding:5px 14px; font-size:0.85rem;">Clear</button>
+                            <button id="btn-copy-logs" class="btn" style="padding:5px 14px; font-size:0.85rem;">Copy All</button>
                         </div>
+                    </div>
+
+                    <!-- Stats bar -->
+                    <div id="logs-stats" style="display:flex; gap:20px; padding:8px 16px; background:rgba(255,255,255,0.03); border-radius:8px; margin-bottom:12px; font-size:0.8rem;">
+                        <span>Total: <b id="logs-count-total">0</b></span>
+                        <span style="color:#36d399;">INFO: <b id="logs-count-info">0</b></span>
+                        <span style="color:#3abff8;">DEBUG: <b id="logs-count-debug">0</b></span>
+                        <span style="color:#fbbd23;">WARN: <b id="logs-count-warn">0</b></span>
+                        <span style="color:#f87272;">ERROR: <b id="logs-count-error">0</b></span>
+                        <span style="margin-left:auto; color:var(--text-secondary);" id="logs-last-updated"></span>
+                    </div>
+
+                    <!-- Log stream -->
+                    <div id="logs-stream" style="
+                        font-family: 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+                        font-size: 0.8rem;
+                        background: #0d1117;
+                        border-radius: 10px;
+                        padding: 12px;
+                        height: calc(100vh - 240px);
+                        overflow-y: auto;
+                        line-height: 1.7;
+                        border: 1px solid rgba(255,255,255,0.06);
+                    "></div>
+                </section>
+
+                <!-- Settings View -->
+
+                <section id="settings-view" class="view hidden">
+                    <div class="view-header">
+                        <h2>Settings</h2>
                     </div>
                     
-                    <div class="chart-container" style="margin-bottom: 20px;">
-                        <h3 style="margin-bottom: 15px;">Automated Backup Schedules</h3>
-                        <form id="add-schedule-form" class="inline-form" style="margin-bottom: 15px;">
-                            <input type="text" id="schedule-path" placeholder="Project Path (e.g., E:/myproject)" required style="flex: 2;">
-                            <input type="number" id="schedule-interval" placeholder="Interval (Hours)" min="1" required style="flex: 1;">
-                            <button type="submit" class="btn secondary">Add Schedule</button>
-                        </form>
-                        <table class="table" style="width: 100%;">
-                            <thead>
-                                <tr>
-                                    <th>Project Path</th>
-                                    <th>Interval</th>
-                                    <th>Last Run</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="schedules-table-body">
-                                <!-- Schedules injected by main.js -->
-                            </tbody>
-                        </table>
-                    </div>
+                    <div class="card" style="max-width: 600px; padding: 25px;">
+                        <h3 style="margin-top:0;">Gemini AI Integration</h3>
+                        <p style="color: var(--text-secondary); font-size: 0.9rem; margin-bottom: 20px;">
+                            Enter your Gemini API key to enable AI-powered commit summaries, syntax checking, and logic explanations.
+                        </p>
+                        
+                        <div class="form-group" style="margin-bottom: 15px;">
+                            <label>AI Provider</label>
+                            <select id="settings-ai-provider" class="input" style="width: 100%;">
+                                <option value="gemini">Google Gemini API (Cloud)</option>
+                                <option value="ollama">Ollama (Local / Free)</option>
+                                <option value="nvidia">Nvidia NIM API (Cloud)</option>
+                            </select>
+                        </div>
+                        
+                        <div id="settings-gemini-group" class="form-group" style="margin-bottom: 15px;">
+                            <label>Gemini API Key</label>
+                            <input type="password" id="settings-gemini-key" class="input" placeholder="AIzaSy..." style="width: 100%;">
+                        </div>
 
-                    <h3 style="margin-bottom: 15px; color: var(--text-primary);">Manual Backups</h3>
-                    <div class="vault-list" id="guardian-vault-list">
-                        <!-- Backup items injected here by main.js -->
+                        <div id="settings-ollama-group" class="form-group" style="margin-bottom: 15px; display: none;">
+                            <label>Ollama Model Name</label>
+                            <input type="text" id="settings-ollama-model" class="input" placeholder="e.g. llama3" style="width: 100%;" value="llama3">
+                            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">Make sure Ollama is running and you have pulled the model (e.g. <code>ollama run llama3</code>).</p>
+                        </div>
+
+                        <div id="settings-nvidia-group" class="form-group" style="margin-bottom: 15px; display: none;">
+                            <label style="display:block; margin-bottom: 5px;">Nvidia API Key</label>
+                            <input type="password" id="settings-nvidia-key" class="input" placeholder="nvapi-..." style="width: 100%; margin-bottom: 10px;">
+                            <label style="display:block; margin-bottom: 5px;">Nvidia Model Name</label>
+                            <input type="text" id="settings-nvidia-model" class="input" placeholder="e.g. deepseek-ai/deepseek-coder-33b-instruct" style="width: 100%;" value="deepseek-ai/deepseek-coder-33b-instruct">
+                            <p style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 5px;">Get your key from <a href="https://build.nvidia.com/explore/discover" target="_blank" style="color: var(--accent-color);">build.nvidia.com</a>.</p>
+                        </div>
+                        
+                        <button id="btn-save-settings" class="btn primary">Save Settings</button>
                     </div>
                 </section>
+
+
 
             </div>
         </main>
@@ -400,6 +501,24 @@
         </div>
     </div>
 
-    <script src="/src/main.js" type="module"></script>
+    <!-- Pomodoro Distraction Modal Overlay -->
+    <div id="distraction-modal" style="display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.85); z-index: 9999; align-items: center; justify-content: center; backdrop-filter: blur(5px);">
+        <div style="background: var(--bg-dark); border: 2px solid var(--accent-danger); border-radius: 12px; padding: 40px; text-align: center; max-width: 500px; box-shadow: 0 0 50px rgba(255, 69, 58, 0.4);">
+            <div style="font-size: 4rem; margin-bottom: 20px;">🚨</div>
+            <h2 style="color: var(--accent-danger); margin-bottom: 15px; font-size: 2rem;">DISTRACTION DETECTED</h2>
+            <p style="font-size: 1.1rem; color: var(--text-primary); margin-bottom: 25px;">You are supposed to be focusing! Close the distracting application immediately.</p>
+            <div style="background: rgba(255, 69, 58, 0.1); padding: 15px; border-radius: 8px; margin-bottom: 25px; color: var(--accent-danger); font-family: monospace; font-size: 1.2rem;" id="distraction-app-name">
+                Unknown App
+            </div>
+            <button id="btn-dismiss-distraction" class="btn primary" style="font-size: 1.1rem; padding: 12px 30px; background-color: var(--accent-danger);">I will focus now</button>
+        </div>
+    </div>
+
+    <!-- Pomodoro Audio Tone (Base64 inline to avoid missing files) -->
+    <audio id="pomodoro-audio-tone" preload="auto">
+        <source src="data:audio/mp3;base64,//NExAAAAANIAUAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAUAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq//NExAAAAANIAUAAAExBTUUzLjEwMKqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq" type="audio/mpeg">
+    </audio>
+
+    <script src="src/main.js" type="module"></script>
 </body>
 </html>
