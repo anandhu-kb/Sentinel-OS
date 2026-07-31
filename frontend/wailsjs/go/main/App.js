@@ -122,6 +122,10 @@ export function RestoreSnapshot(arg1, arg2) {
   return window['go']['main']['App']['RestoreSnapshot'](arg1, arg2);
 }
 
+export function SelectDirectory() {
+  return window['go']['main']['App']['SelectDirectory']();
+}
+
 export function StartPomodoro(arg1, arg2) {
   return window['go']['main']['App']['StartPomodoro'](arg1, arg2);
 }

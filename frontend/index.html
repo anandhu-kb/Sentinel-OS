@@ -342,9 +342,12 @@
                 <section id="snapshots-view" class="view hidden">
                     <div class="view-header">
                         <h2>Deterministic Version Control</h2>
-                        <div class="inline-form">
-                            <input type="text" id="snapshot-path" placeholder="Project Path (e.g., E:/myproject)" value="E:/Vscode/go/Sentinel-OS">
-                            <input type="text" id="snapshot-msg" placeholder="Commit message">
+                        <div class="inline-form" style="gap: 5px;">
+                            <div style="display:flex; gap:0;">
+                                <input type="text" id="snapshot-path" placeholder="Project Path" value="E:/Vscode/go/Sentinel-OS" style="border-top-right-radius:0; border-bottom-right-radius:0;">
+                                <button id="btn-browse-snapshot-path" class="btn" style="border-top-left-radius:0; border-bottom-left-radius:0; padding: 0 10px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-left: none;">📁</button>
+                            </div>
+                            <input type="text" id="snapshot-msg" placeholder="Commit message" style="margin-left: 10px;">
                             <button id="btn-take-snapshot" class="btn primary">Take Snapshot</button>
                         </div>
                     </div>

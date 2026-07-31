@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+
 	"github.com/shirou/gopsutil/v3/cpu"
 	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/host"
@@ -156,6 +158,14 @@ func (a *App) shutdown(ctx context.Context) {
 		}
 	}
 	logger.Close()
+}
+
+// SelectDirectory opens a native OS folder selection dialog.
+// Returns the selected path, or an empty string if cancelled.
+func (a *App) SelectDirectory() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "Select Project Directory",
+	})
 }
 
 // GetLogs returns the most recent log entries from the in-memory ring buffer.

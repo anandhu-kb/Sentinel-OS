@@ -66,6 +66,8 @@ export function RemoveWatcherRule(arg1:number):Promise<void>;
 
 export function RestoreSnapshot(arg1:number,arg2:string):Promise<void>;
 
+export function SelectDirectory():Promise<string>;
+
 export function StartPomodoro(arg1:number,arg2:string):Promise<number>;
 
 export function TriggerDistractionAlert():Promise<void>;

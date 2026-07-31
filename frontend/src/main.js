@@ -30,7 +30,8 @@ import {
     GetPomodoroHistory,
     TriggerDistractionAlert,
     GetRunningApps,
-    GetLogs
+    GetLogs,
+    SelectDirectory
 } from '../wailsjs/go/main/App.js';
 
 // Wails runtime is available globally via window.runtime
@@ -75,6 +76,19 @@ document.addEventListener('DOMContentLoaded', () => {
         const modal = document.getElementById('snapshot-diff-modal');
         modal.classList.add('hidden');
         modal.style.display = 'none';
+    });
+
+    // ── Snapshot Path Browse ──
+    document.getElementById('btn-browse-snapshot-path').addEventListener('click', async () => {
+        try {
+            const dir = await SelectDirectory();
+            if (dir) {
+                document.getElementById('snapshot-path').value = dir;
+                loadSnapshotsData(); // reload history for new path
+            }
+        } catch (err) {
+            console.error("Failed to select directory:", err);
+        }
     });
 
     // ── Initial Data Load ──
